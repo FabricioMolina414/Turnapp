@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import brandLogo from './assets/Logo_AC-removebg-preview.png';
+import heroImage from './assets/barberia-hero.jpg';
 
 const SERVICE_CATEGORIES = {
   peluqueria: {
@@ -79,16 +80,19 @@ const STEPS = [
     title: 'Compartí tu link automático',
     copy:
       'Automatizá tu respuesta de WhatsApp y guiá a las clientas para que elijan su servicio y horario disponibles.',
+    image: '/cortes/corte-1.jpg',
   },
   {
     title: 'Gestioná tu agenda visual',
     copy:
       'Visualizá turnos confirmados, pendientes y cancelados en un panel diseñado para la vida en salón.',
+    image: '/cortes/corte-2.jpg',
   },
   {
     title: 'Confirmá y cobrá desde el mismo lugar',
     copy:
       'Recibí alertas y confirmaciones en tiempo real. Configurá seña previa para los servicios de alta demanda.',
+    image: '/cortes/corte-3.jpg',
   },
 ];
 
@@ -395,10 +399,9 @@ function Hero({ onReserveClick, reserveButtonRef }) {
         <div className="stack-lg hero">
           <span className="badge">Turnero inteligente para salones</span>
           <div className="stack-sm">
-            <h1 className="headline">Recibí tus turnos sin contestar mensajes</h1>
+            <h1 className="headline">Peluquería y barbería Aaron Córdoba</h1>
             <p className="subheadline">
-              Automatizá tu WhatsApp con una experiencia pensada para peluquerías y servicios de
-              manicura. Mostrá tus servicios, reseñas y gestioná pagos desde un mismo lugar.
+              Experiencia premium. Ofrecemos cortes precisos, barbas impecables y atención dedicada en un entorno exclusivo
             </p>
           </div>
           <div className="hero-actions">
@@ -414,7 +417,7 @@ function Hero({ onReserveClick, reserveButtonRef }) {
         </div>
         <div className="stack hero-media">
           <img
-            src="https://images.unsplash.com/photo-1522336572468-97b06e8ef143?auto=format&fit=crop&w=900&q=80"
+            src={heroImage}
             alt="Estilista trabajando con una clienta"
             loading="lazy"
           />
@@ -513,11 +516,10 @@ function Services({ onReserveClick }) {
         <div className="stack-sm">
           <div className="stack-sm">
             <h2 className="headline" style={{ fontSize: '2rem' }}>
-              Diseñado para peluquerías y manicuras
+              Servicios populares
             </h2>
             <p className="subheadline">
-              Cargá tus servicios con duración, precios y etiquetas. Ayudá a que elijan justo lo que necesitan
-              sin perder tiempo en la conversación.
+              Estos son los tres servicios más elegidos por nuestros clientes. Al reservar tu turno, podrás encontrar más opciones.
             </p>
           </div>
         </div>
@@ -622,16 +624,18 @@ function HowItWorks() {
     <section className="section is-accent" id="como-funciona">
       <div className="container stack-lg">
         <h2 className="headline" style={{ fontSize: '2rem' }}>
-          Pasos claros para vos y tus clientas
+          Algunos de nuestros cortes
         </h2>
         <div className="timeline" ref={timelineRef}>
           {STEPS.map((step, index) => (
             <article key={step.title} className="step">
-              <div className="step-number">{index + 1}</div>
-              <div>
-                <h3>{step.title}</h3>
-                <p>{step.copy}</p>
-              </div>
+              <figure className="step-media">
+                <img
+                  src={step.image}
+                  alt={`Paso ${index + 1}: ${step.title}`}
+                  loading="lazy"
+                />
+              </figure>
             </article>
           ))}
         </div>
@@ -1567,7 +1571,14 @@ function Checkout({ data, onBack, onReturnHome }) {
     }
     const active = container.querySelector(`.payment-method[data-method-id="${method}"]`);
     if (active) {
-      active.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'center' });
+      const containerWidth = container.clientWidth;
+      const maxScrollLeft = Math.max(0, container.scrollWidth - containerWidth);
+      const targetScrollLeft =
+        active.offsetLeft - (containerWidth - active.offsetWidth) / 2;
+      container.scrollTo({
+        left: Math.min(Math.max(targetScrollLeft, 0), maxScrollLeft),
+        behavior: 'smooth',
+      });
     }
     if (typeof window !== 'undefined') {
       window.requestAnimationFrame(() => updatePaymentScrollState());
