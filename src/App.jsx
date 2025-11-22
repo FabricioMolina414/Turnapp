@@ -144,7 +144,10 @@ const BOOKING_SERVICES = [
   },
 ];
 
-const BARBERS = [
+const DEFAULT_STAFF_AVATAR =
+  'data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128"><rect width="128" height="128" rx="24" fill="%23f1f5f9"/><circle cx="64" cy="52" r="26" fill="%2394a3b8"/><path d="M24 112c0-22 18-40 40-40s40 18 40 40" fill="%23cbd5f5"/></svg>';
+
+const DEFAULT_BARBERS = [
   {
     id: 'ana',
     name: 'Ana López',
@@ -186,6 +189,8 @@ const SALON_LOCATION = {
 };
 
 const THEME_STORAGE_KEY = 'turnapp-theme';
+
+const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:4000/api';
 
 const getPreferredTheme = () => {
   if (typeof window === 'undefined') {
@@ -845,7 +850,14 @@ function FloatingReserveCTA({ onClick }) {
   );
 }
 
-function BookingFlow({ onBack, onProceedToPayment }) {
+function BookingFlow({
+  onBack,
+  onProceedToPayment,
+  barbers = [],
+  isLoadingBarbers = false,
+  barbersError = null,
+  onRetryBarbers,
+}) {
   const [selectedBarber, setSelectedBarber] = useState(null);
   const [selectedService, setSelectedService] = useState(null);
   const [activeStep, setActiveStep] = useState(1);
@@ -1231,11 +1243,33 @@ function BookingFlow({ onBack, onProceedToPayment }) {
     }
   };
 
+  useEffect(() => {
+    if (!barbers?.length) {
+      setSelectedBarber(null);
+      return;
+    }
+    setSelectedBarber((prev) => {
+      if (!prev) {
+        return prev;
+      }
+      if (barbers.some((item) => item.id === prev)) {
+        return prev;
+      }
+      return barbers[0].id;
+    });
+
+    if (typeof window !== 'undefined') {
+      window.requestAnimationFrame(updateBarberScrollState);
+    } else {
+      updateBarberScrollState();
+    }
+  }, [barbers, updateBarberScrollState]);
+
   const handleProceedToPayment = () => {
     if (!selectedBarber || !selectedService || !selectedDay || !selectedSlot) {
       return;
     }
-    const barber = BARBERS.find((info) => info.id === selectedBarber) ?? null;
+    const barber = barbers.find((info) => info.id === selectedBarber) ?? null;
     const service = BOOKING_SERVICES.find((info) => info.id === selectedService) ?? null;
     const dayInfo = weekOptions.find((day) => day.id === selectedDay) ?? null;
 
@@ -1255,6 +1289,9 @@ function BookingFlow({ onBack, onProceedToPayment }) {
       customer: customerData,
     });
   };
+
+  const hasBarbers = Array.isArray(barbers) && barbers.length > 0;
+  const showCarousel = !isLoadingBarbers && hasBarbers;
 
   return (
     <div className="booking-page">
@@ -1281,39 +1318,66 @@ function BookingFlow({ onBack, onProceedToPayment }) {
         <div className="barber-carousel">
           <button
             type="button"
-            className={`barber-nav barber-nav-left${canScrollBarberLeft ? '' : ' is-hidden'}`}
+            className={`barber-nav barber-nav-left${showCarousel && canScrollBarberLeft ? '' : ' is-hidden'}`}
             onClick={() => handleScrollBarberList(-1)}
             aria-label="Ver peluquero anterior"
-            disabled={!canScrollBarberLeft}
+            disabled={!showCarousel || !canScrollBarberLeft}
           >
             <span aria-hidden>‹</span>
           </button>
           <div className="barber-grid" ref={barberListRef}>
-            {BARBERS.map((barber) => (
-              <button
-                key={barber.id}
-                type="button"
-                className={`barber-card ${selectedBarber === barber.id ? 'is-selected' : ''}`}
-                onClick={() => handleSelectBarber(barber.id)}
-                data-barber-id={barber.id}
-              >
-                <div className="barber-avatar">
-                  <img src={barber.avatar} alt={barber.name} loading="lazy" />
-                </div>
-                <span>{barber.name}</span>
-              </button>
-            ))}
+            {isLoadingBarbers ? (
+              <div className="booking-status">Cargando peluqueros...</div>
+            ) : hasBarbers ? (
+              barbers.map((barber) => (
+                <button
+                  key={barber.id}
+                  type="button"
+                  className={`barber-card ${selectedBarber === barber.id ? 'is-selected' : ''}`}
+                  onClick={() => handleSelectBarber(barber.id)}
+                  data-barber-id={barber.id}
+                >
+                  <div className="barber-avatar">
+                    <img
+                      src={barber.avatar || DEFAULT_STAFF_AVATAR}
+                      alt={barber.name}
+                      loading="lazy"
+                    />
+                  </div>
+                  <span>{barber.name}</span>
+                </button>
+              ))
+            ) : (
+              <div className="booking-status is-empty">
+                <p>Por ahora no hay peluqueros disponibles.</p>
+                {onRetryBarbers && (
+                  <button type="button" className="secondary-link" onClick={onRetryBarbers}>
+                    Reintentar
+                  </button>
+                )}
+              </div>
+            )}
           </div>
           <button
             type="button"
-            className={`barber-nav barber-nav-right${canScrollBarberRight ? '' : ' is-hidden'}`}
+            className={`barber-nav barber-nav-right${showCarousel && canScrollBarberRight ? '' : ' is-hidden'}`}
             onClick={() => handleScrollBarberList(1)}
             aria-label="Ver peluquero siguiente"
-            disabled={!canScrollBarberRight}
+            disabled={!showCarousel || !canScrollBarberRight}
           >
             <span aria-hidden>›</span>
           </button>
         </div>
+        {barbersError && (
+          <div className="booking-alert">
+            <p>{barbersError}</p>
+            {onRetryBarbers && (
+              <button type="button" className="secondary-link" onClick={onRetryBarbers}>
+                Reintentar
+              </button>
+            )}
+          </div>
+        )}
       </section>
       {activeStep >= 2 && (
         <section
@@ -1742,6 +1806,58 @@ function App() {
   const isHomeView = view === 'home';
   const [showFloatingCTA, setShowFloatingCTA] = useState(false);
   const heroReserveButtonRef = useRef(null);
+  const [barbers, setBarbers] = useState([]);
+  const [isLoadingBarbers, setIsLoadingBarbers] = useState(false);
+  const [barbersError, setBarbersError] = useState(null);
+  const loadBarbers = useCallback(
+    async (signal) => {
+      const controllerSignal = signal;
+      setIsLoadingBarbers(true);
+      setBarbersError(null);
+      try {
+        const response = await fetch(`${API_BASE_URL}/public/staff`, controllerSignal ? { signal: controllerSignal } : undefined);
+        if (!response.ok) {
+          throw new Error('No se pudo cargar la lista de peluqueros.');
+        }
+        const data = await response.json();
+        if (!controllerSignal?.aborted) {
+          const payload = Array.isArray(data?.staff) ? data.staff : [];
+          setBarbers(payload.map((item) => ({ ...item, avatar: item.avatar || DEFAULT_STAFF_AVATAR })));
+        }
+      } catch (error) {
+        if (error.name === 'AbortError') {
+          return;
+        }
+        console.error('[Public] Error al cargar peluqueros', error);
+        if (!controllerSignal?.aborted) {
+          setBarbers(
+            DEFAULT_BARBERS.map((item) => ({
+              ...item,
+              avatar: item.avatar || DEFAULT_STAFF_AVATAR,
+            }))
+          );
+          setBarbersError('No pudimos cargar el equipo desde el panel. Mostramos un listado demo.');
+        }
+      } finally {
+        if (!controllerSignal?.aborted) {
+          setIsLoadingBarbers(false);
+        }
+      }
+    },
+    []
+  );
+
+  useEffect(() => {
+    const controller = new AbortController();
+    loadBarbers(controller.signal);
+    return () => {
+      controller.abort();
+    };
+  }, [loadBarbers]);
+
+  const handleReloadBarbers = useCallback(() => {
+    loadBarbers();
+  }, [loadBarbers]);
 
   useEffect(() => {
     if (typeof document === 'undefined') {
@@ -1837,7 +1953,14 @@ function App() {
       />
       <main className={`main-content${isHomeView && showFloatingCTA ? ' has-floating-cta' : ''}`}>
         {view === 'booking' ? (
-          <BookingFlow onBack={handleNavigateHome} onProceedToPayment={handleProceedToPayment} />
+          <BookingFlow
+            onBack={handleNavigateHome}
+            onProceedToPayment={handleProceedToPayment}
+            barbers={barbers}
+            isLoadingBarbers={isLoadingBarbers}
+            barbersError={barbersError}
+            onRetryBarbers={handleReloadBarbers}
+          />
         ) : view === 'checkout' ? (
           <Checkout data={checkoutData} onBack={handleBackToBooking} onReturnHome={handleNavigateHome} />
         ) : (

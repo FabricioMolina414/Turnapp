@@ -1,0 +1,698 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+// Looking for ways to speed up your queries, or scale easily with your serverless or edge functions?
+// Try Prisma Accelerate: https://pris.ly/cli/accelerate-init
+
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum UserRole {
+  SUPERADMIN
+  BUSINESS_ADMIN
+  STAFF
+}
+
+enum BusinessUserRole {
+  OWNER
+  MANAGER
+  STAFF
+}
+
+enum DayOfWeek {
+  MONDAY
+  TUESDAY
+  WEDNESDAY
+  THURSDAY
+  FRIDAY
+  SATURDAY
+  SUNDAY
+}
+
+enum BookingStatus {
+  PENDING
+  CONFIRMED
+  COMPLETED
+  CANCELLED
+  NO_SHOW
+  RESCHEDULED
+}
+
+enum BookingSource {
+  PUBLIC_SITE
+  ADMIN_PANEL
+  WHATSAPP
+  OTHER
+}
+
+enum PaymentStatus {
+  PENDING
+  AUTHORIZED
+  PARTIAL
+  PAID
+  REFUNDED
+  FAILED
+}
+
+enum PaymentMethod {
+  CASH
+  CARD
+  TRANSFER
+  MERCADO_PAGO
+  OTHER
+}
+
+enum StaffAssignmentRole {
+  PRIMARY
+  SECONDARY
+  SUPPORT
+}
+
+enum MfaMethodType {
+  TOTP
+  SMS
+  EMAIL
+}
+
+enum MetricPeriod {
+  DAILY
+  WEEKLY
+  MONTHLY
+  YEARLY
+}
+
+enum MetricEventType {
+  BOOKING_CREATED
+  BOOKING_CONFIRMED
+  BOOKING_CANCELLED
+  BOOKING_COMPLETED
+  BOOKING_NO_SHOW
+  BOOKING_RESCHEDULED
+  PAYMENT_CAPTURED
+  PAYMENT_REFUNDED
+}
+
+enum ContentBlockType {
+  HERO
+  CTA
+  METRIC
+  TESTIMONIAL
+  FAQ
+  HIGHLIGHT
+  CUSTOM
+}
+
+model Plan {
+  id               String          @id @default(cuid())
+  code             String          @unique
+  name             String
+  description      String?
+  priceMonthly     Decimal?        @db.Decimal(10, 2)
+  currency         String?         @default("ARS")
+  maxBranches      Int?
+  maxStaff         Int?
+  maxServices      Int?
+  allowMfa         Boolean         @default(false)
+  allowMultiBranch Boolean         @default(true)
+  featureFlags     Json?
+  createdAt        DateTime        @default(now())
+  updatedAt        DateTime        @updatedAt
+
+  businesses  Business[]
+  features    PlanFeature[]
+  planHistory BusinessPlanHistory[] @relation("BusinessPlanHistory_plan")
+  previousFor BusinessPlanHistory[] @relation("BusinessPlanHistory_previousPlan")
+}
+
+model PlanFeature {
+  id          String   @id @default(cuid())
+  planId      String
+  key         String
+  description String?
+  enabled     Boolean  @default(true)
+  config      Json?
+  createdAt   DateTime @default(now())
+
+  plan Plan @relation(fields: [planId], references: [id], onDelete: Cascade)
+
+  @@unique([planId, key])
+}
+
+model Business {
+  id                 String                 @id @default(cuid())
+  planId             String?
+  name               String
+  legalName          String?
+  slug               String                 @unique
+  documentId         String?
+  timezone           String                 @default("America/Argentina/Buenos_Aires")
+  contactEmail       String?
+  contactPhone       String?
+  websiteUrl         String?
+  logoUrl            String?
+  brandColor         String?
+  marketingOptInText String?
+  planActivatedAt    DateTime?
+  planExpiresAt      DateTime?
+  settings           Json?
+  createdAt          DateTime               @default(now())
+  updatedAt          DateTime               @updatedAt
+
+  plan             Plan?                 @relation(fields: [planId], references: [id])
+  branches         Branch[]
+  users            BusinessUser[]
+  customers        Customer[]
+  staffProfiles    StaffProfile[]
+  serviceCategories ServiceCategory[] @relation("BusinessServiceCategories")
+  planEvents       BusinessPlanHistory[]
+}
+
+model BusinessPlanHistory {
+  id              String   @id @default(cuid())
+  businessId      String
+  planId          String?
+  previousPlanId  String?
+  startedAt       DateTime
+  endedAt         DateTime?
+  notes           String?
+  createdAt       DateTime @default(now())
+
+  business     Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  plan         Plan?    @relation("BusinessPlanHistory_plan", fields: [planId], references: [id])
+  previousPlan Plan?    @relation("BusinessPlanHistory_previousPlan", fields: [previousPlanId], references: [id])
+}
+
+model Branch {
+  id            String   @id @default(cuid())
+  businessId    String
+  name          String
+  slug          String
+  description   String?
+  addressLine1  String?
+  addressLine2  String?
+  city          String?
+  state         String?
+  postalCode    String?
+  country       String?
+  timezone      String   @default("America/Argentina/Buenos_Aires")
+  phone         String?
+  email         String?
+  isMain        Boolean  @default(false)
+  latitude      Decimal? @db.Decimal(10, 7)
+  longitude     Decimal? @db.Decimal(10, 7)
+  settings      Json?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  business      Business             @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  services      Service[]
+  serviceCategories ServiceCategory[] @relation("BranchServiceCategories")
+  staff         BranchStaff[]
+  bookings      Booking[]
+  metrics       BranchMetric[]
+  metricEvents  BranchMetricEvent[]
+  contentBlocks BranchContentBlock[]
+  workingHours  BranchWorkingHour[]
+  holidays      BranchHoliday[]
+  customers     Customer[]         @relation("CustomerPrimaryBranch")
+
+  @@unique([businessId, slug])
+}
+
+model User {
+  id               String            @id @default(cuid())
+  name             String
+  email            String            @unique
+  username         String            @unique
+  passwordHash     String
+  role             UserRole          @default(STAFF)
+  phone            String?
+  avatarUrl        String?
+  isActive         Boolean           @default(true)
+  lastLoginAt      DateTime?
+  twoFactorEnabled Boolean           @default(false)
+  metadata         Json?
+  createdAt        DateTime          @default(now())
+  updatedAt        DateTime          @updatedAt
+
+  businesses        BusinessUser[]
+  invitesSent       BusinessUser[]   @relation("BusinessUserInvitedBy")
+  staffProfile      StaffProfile?
+  sessions          UserSession[]
+  mfaMethods        UserMfaMethod[]
+  bookingsCreated   Booking[]        @relation("BookingCreatedBy")
+  bookingsUpdated   Booking[]        @relation("BookingUpdatedBy")
+  bookingAudits     BookingAudit[]
+  schedulesCreated  StaffScheduleTemplate[]
+  timeOffCreated    StaffTimeOff[]
+  contentVersions   BranchContentVersion[]
+  holidaysCreated   BranchHoliday[]
+}
+
+model BusinessUser {
+  id            String            @id @default(cuid())
+  businessId    String
+  userId        String
+  role          BusinessUserRole  @default(MANAGER)
+  allowedBranches String[] @default([])
+  permissions   Json?
+  invitedAt     DateTime?
+  invitedById   String?
+  joinedAt      DateTime?
+  createdAt     DateTime          @default(now())
+  updatedAt     DateTime          @updatedAt
+
+  business  Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  invitedBy User?    @relation("BusinessUserInvitedBy", fields: [invitedById], references: [id])
+
+  @@unique([businessId, userId])
+}
+
+model StaffProfile {
+  id            String        @id @default(cuid())
+  userId        String        @unique
+  businessId    String
+  bio           String?
+  specialties   String[]      @default([])
+  skills        String[]      @default([])
+  avatarUrl     String?
+  defaultColor  String?
+  ratingAverage Decimal?      @db.Decimal(3, 2)
+  totalReviews  Int           @default(0)
+  metadata      Json?
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+
+  user            User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  business        Business       @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  branchAssignments BranchStaff[]
+}
+
+model BranchStaff {
+  id                String        @id @default(cuid())
+  branchId          String
+  staffId           String
+  role              String?
+  color             String?
+  startedAt         DateTime?
+  endedAt           DateTime?
+  isActive          Boolean       @default(true)
+  bufferBefore      Int?          @default(0)
+  bufferAfter       Int?          @default(0)
+  metadata          Json?
+  createdAt         DateTime      @default(now())
+  updatedAt         DateTime      @updatedAt
+
+  branch    Branch        @relation(fields: [branchId], references: [id], onDelete: Cascade)
+  staff     StaffProfile  @relation(fields: [staffId], references: [id], onDelete: Cascade)
+  schedules StaffScheduleTemplate[]
+  timeOff   StaffTimeOff[]
+  services  ServiceStaff[]
+  bookingServices BookingService[]
+  metrics   BranchMetric[]
+  metricEvents BranchMetricEvent[]
+  ratings   BookingRating[]
+
+  @@unique([branchId, staffId])
+}
+
+model StaffScheduleTemplate {
+  id             String    @id @default(cuid())
+  branchStaffId  String
+  version        Int
+  effectiveFrom  DateTime
+  effectiveTo    DateTime?
+  createdById    String?
+  notes          String?
+  createdAt      DateTime  @default(now())
+
+  branchStaff BranchStaff @relation(fields: [branchStaffId], references: [id], onDelete: Cascade)
+  createdBy   User?       @relation(fields: [createdById], references: [id])
+  slots       StaffScheduleSlot[]
+
+  @@unique([branchStaffId, version])
+}
+
+model StaffScheduleSlot {
+  id                  String       @id @default(cuid())
+  scheduleTemplateId  String
+  dayOfWeek           DayOfWeek
+  startMinutes        Int
+  endMinutes          Int
+  capacity            Int?
+  createdAt           DateTime     @default(now())
+
+  schedule StaffScheduleTemplate @relation(fields: [scheduleTemplateId], references: [id], onDelete: Cascade)
+}
+
+model StaffTimeOff {
+  id            String   @id @default(cuid())
+  branchStaffId String
+  startsAt      DateTime
+  endsAt        DateTime
+  reason        String?
+  createdById   String?
+  createdAt     DateTime @default(now())
+
+  branchStaff BranchStaff @relation(fields: [branchStaffId], references: [id], onDelete: Cascade)
+  createdBy   User?       @relation(fields: [createdById], references: [id])
+}
+
+model ServiceCategory {
+  id          String   @id @default(cuid())
+  businessId  String
+  branchId    String?
+  name        String
+  description String?
+  color       String?
+  icon        String?
+  order       Int      @default(0)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  business Business @relation("BusinessServiceCategories", fields: [businessId], references: [id], onDelete: Cascade)
+  branch   Branch?  @relation("BranchServiceCategories", fields: [branchId], references: [id], onDelete: SetNull)
+  services Service[]
+
+  @@unique([businessId, branchId, name])
+}
+
+model Service {
+  id              String   @id @default(cuid())
+  branchId        String
+  categoryId      String?
+  name            String
+  slug            String
+  description     String?
+  durationMinutes Int
+  price           Decimal  @db.Decimal(10, 2)
+  currency        String   @default("ARS")
+  active          Boolean  @default(true)
+  bufferBefore    Int      @default(0)
+  bufferAfter     Int      @default(0)
+  order           Int      @default(0)
+  imageUrl        String?
+  metadata        Json?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  branch        Branch          @relation(fields: [branchId], references: [id], onDelete: Cascade)
+  category      ServiceCategory? @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  staff         ServiceStaff[]
+  bookingItems  BookingService[]
+
+  @@unique([branchId, slug])
+}
+
+model ServiceStaff {
+  id            String              @id @default(cuid())
+  serviceId     String
+  branchStaffId String
+  role          StaffAssignmentRole @default(PRIMARY)
+  createdAt     DateTime            @default(now())
+
+  service    Service     @relation(fields: [serviceId], references: [id], onDelete: Cascade)
+  branchStaff BranchStaff @relation(fields: [branchStaffId], references: [id], onDelete: Cascade)
+
+  @@unique([serviceId, branchStaffId])
+}
+
+model Customer {
+  id              String   @id @default(cuid())
+  businessId      String
+  primaryBranchId String?
+  firstName       String?
+  lastName        String?
+  fullName        String?
+  email           String?
+  phone           String?
+  whatsapp        String?
+  instagram       String?
+  birthDate       DateTime?
+  marketingOptIn  Boolean  @default(false)
+  notes           String?
+  tags            String[] @default([])
+  metadata        Json?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  business      Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  primaryBranch Branch?  @relation("CustomerPrimaryBranch", fields: [primaryBranchId], references: [id], onDelete: SetNull)
+  bookings      Booking[]
+  payments      Payment[]
+  ratings       BookingRating[]
+
+  @@index([businessId, email])
+  @@index([businessId, phone])
+}
+
+model Booking {
+  id                String         @id @default(cuid())
+  branchId          String
+  customerId        String
+  scheduledStart    DateTime
+  scheduledEnd      DateTime
+  status            BookingStatus  @default(PENDING)
+  source            BookingSource  @default(PUBLIC_SITE)
+  originChannel     String?
+  notes             String?
+  cancellationReason String?
+  createdById       String?
+  updatedById       String?
+  totalPrice        Decimal?       @db.Decimal(10, 2)
+  currency          String         @default("ARS")
+  depositAmount     Decimal?       @db.Decimal(10, 2)
+  depositDueAt      DateTime?
+  metadata          Json?
+  createdAt         DateTime       @default(now())
+  updatedAt         DateTime       @updatedAt
+
+  branch       Branch   @relation(fields: [branchId], references: [id], onDelete: Cascade)
+  customer     Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  services     BookingService[]
+  payments     Payment[]
+  auditTrail   BookingAudit[]
+  rating       BookingRating?
+  createdBy    User?    @relation("BookingCreatedBy", fields: [createdById], references: [id])
+  updatedBy    User?    @relation("BookingUpdatedBy", fields: [updatedById], references: [id])
+  metricEvents BranchMetricEvent[]
+}
+
+model BookingService {
+  id             String              @id @default(cuid())
+  bookingId      String
+  serviceId      String
+  branchStaffId  String?
+  staffRole      StaffAssignmentRole @default(PRIMARY)
+  price          Decimal             @db.Decimal(10, 2)
+  durationMinutes Int
+  order          Int                 @default(0)
+  notes          String?
+  metadata       Json?
+  createdAt      DateTime            @default(now())
+
+  booking     Booking     @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+  service     Service     @relation(fields: [serviceId], references: [id], onDelete: Cascade)
+  branchStaff BranchStaff? @relation(fields: [branchStaffId], references: [id], onDelete: SetNull)
+}
+
+model Payment {
+  id               String        @id @default(cuid())
+  bookingId        String
+  customerId       String
+  status           PaymentStatus @default(PENDING)
+  method           PaymentMethod @default(CASH)
+  amount           Decimal       @db.Decimal(10, 2)
+  currency         String        @default("ARS")
+  externalReference String?
+  paidAt           DateTime?
+  metadata         Json?
+  createdAt        DateTime      @default(now())
+  updatedAt        DateTime      @updatedAt
+
+  booking  Booking  @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+  customer Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+
+  @@index([bookingId, status])
+}
+
+model BookingAudit {
+  id         String        @id @default(cuid())
+  bookingId  String
+  userId     String?
+  action     String
+  fromStatus BookingStatus?
+  toStatus   BookingStatus?
+  payload    Json?
+  createdAt  DateTime      @default(now())
+
+  booking Booking @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+  user    User?   @relation(fields: [userId], references: [id], onDelete: SetNull)
+}
+
+model BookingRating {
+  id             String       @id @default(cuid())
+  bookingId      String       @unique
+  customerId     String
+  branchStaffId  String?
+  score          Int
+  comment        String?
+  createdAt      DateTime     @default(now())
+
+  booking     Booking     @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+  customer    Customer    @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  branchStaff BranchStaff? @relation(fields: [branchStaffId], references: [id], onDelete: SetNull)
+}
+
+model BranchMetric {
+  id                    String       @id @default(cuid())
+  branchId              String
+  staffId               String?
+  periodType            MetricPeriod @default(MONTHLY)
+  periodStart           DateTime
+  periodEnd             DateTime
+  confirmedAppointments Int          @default(0)
+  cancelledAppointments Int          @default(0)
+  noShowAppointments    Int          @default(0)
+  revenue               Decimal?     @db.Decimal(12, 2)
+  deposits              Decimal?     @db.Decimal(12, 2)
+  workingMinutes        Int?
+  utilizedMinutes       Int?
+  newCustomers          Int          @default(0)
+  repeatCustomers       Int          @default(0)
+  averageTicket         Decimal?     @db.Decimal(10, 2)
+  averageRating         Decimal?     @db.Decimal(3, 2)
+  metadata              Json?
+  createdAt             DateTime     @default(now())
+  updatedAt             DateTime     @updatedAt
+
+  branch Branch      @relation(fields: [branchId], references: [id], onDelete: Cascade)
+  staff  BranchStaff? @relation(fields: [staffId], references: [id], onDelete: SetNull)
+  events BranchMetricEvent[]
+
+  @@index([branchId, periodType, periodStart])
+}
+
+model BranchMetricEvent {
+  id             String          @id @default(cuid())
+  branchMetricId String?
+  branchId       String
+  bookingId      String?
+  branchStaffId  String?
+  eventType      MetricEventType
+  occurredAt     DateTime        @default(now())
+  payload        Json?
+  createdAt      DateTime        @default(now())
+
+  metric      BranchMetric? @relation(fields: [branchMetricId], references: [id], onDelete: SetNull)
+  branch      Branch        @relation(fields: [branchId], references: [id], onDelete: Cascade)
+  booking     Booking?      @relation(fields: [bookingId], references: [id], onDelete: SetNull)
+  branchStaff BranchStaff?  @relation(fields: [branchStaffId], references: [id], onDelete: SetNull)
+}
+
+model BranchContentBlock {
+  id               String                 @id @default(cuid())
+  branchId         String
+  type             ContentBlockType
+  identifier       String
+  isPublished      Boolean                @default(false)
+  currentVersionId String? @unique
+  createdAt        DateTime               @default(now())
+  updatedAt        DateTime               @updatedAt
+
+  branch        Branch                 @relation(fields: [branchId], references: [id], onDelete: Cascade)
+  currentVersion BranchContentVersion? @relation("CurrentBranchContentVersion", fields: [currentVersionId], references: [id])
+  versions      BranchContentVersion[] @relation("BranchContentVersions")
+
+  @@unique([branchId, identifier])
+}
+
+model BranchContentVersion {
+  id                     String   @id @default(cuid())
+  branchContentBlockId   String
+  versionNumber          Int
+  title                  String?
+  subtitle               String?
+  body                   String?
+  mediaUrl               String?
+  ctaLabel               String?
+  ctaUrl                 String?
+  order                  Int      @default(0)
+  metadata               Json?
+  createdById            String?
+  createdAt              DateTime @default(now())
+  publishedAt            DateTime?
+
+  block      BranchContentBlock @relation("BranchContentVersions", fields: [branchContentBlockId], references: [id], onDelete: Cascade)
+  createdBy  User?              @relation(fields: [createdById], references: [id])
+  currentFor BranchContentBlock? @relation("CurrentBranchContentVersion")
+
+  @@unique([branchContentBlockId, versionNumber])
+}
+
+model BranchWorkingHour {
+  id          String   @id @default(cuid())
+  branchId    String
+  dayOfWeek   DayOfWeek
+  openMinutes Int
+  closeMinutes Int
+  isClosed    Boolean  @default(false)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  branch Branch @relation(fields: [branchId], references: [id], onDelete: Cascade)
+
+  @@unique([branchId, dayOfWeek])
+}
+
+model BranchHoliday {
+  id          String   @id @default(cuid())
+  branchId    String
+  startsAt    DateTime
+  endsAt      DateTime
+  description String?
+  createdById String?
+  createdAt   DateTime @default(now())
+
+  branch    Branch @relation(fields: [branchId], references: [id], onDelete: Cascade)
+  createdBy User?  @relation(fields: [createdById], references: [id])
+}
+
+model UserSession {
+  id         String   @id @default(cuid())
+  userId     String
+  tokenHash  String
+  createdAt  DateTime @default(now())
+  expiresAt  DateTime
+  lastUsedAt DateTime?
+  metadata   Json?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, expiresAt])
+}
+
+model UserMfaMethod {
+  id          String        @id @default(cuid())
+  userId      String
+  type        MfaMethodType
+  secret      String
+  label       String?
+  backupCodes String[]      @default([])
+  verifiedAt  DateTime?
+  lastUsedAt  DateTime?
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, type, label])
+}

@@ -982,6 +982,42 @@ html.is-dark-mode .footer-logo img {
   grid-area: step;
 }
 
+.booking-status {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.6rem;
+  padding: 1.4rem;
+  border-radius: 1.2rem;
+  border: 1px dashed var(--border-muted);
+  background: var(--surface-100);
+  color: var(--neutral-600);
+  text-align: center;
+  min-height: 140px;
+}
+
+.booking-status button {
+  align-self: center;
+}
+
+.booking-status.is-empty {
+  background: var(--surface-pill);
+}
+
+.booking-alert {
+  margin-top: 1rem;
+  padding: 1rem 1.2rem;
+  border-radius: 1rem;
+  border: 1px solid rgba(248, 113, 113, 0.35);
+  background: rgba(254, 226, 226, 0.75);
+  color: #991b1b;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.8rem;
+}
+
 .barber-grid {
   display: grid;
   gap: 1.2rem;
