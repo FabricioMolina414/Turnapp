@@ -1,0 +1,69 @@
+[
+  {
+    "id": "color-experto",
+    "name": "Color Experto",
+    "durationMinutes": 150,
+    "price": 24500,
+    "category": "Colorimetría",
+    "professionals": [
+      "Ana López"
+    ],
+    "description": "Balayage, iluminaciones y matices con diagnóstico previo.",
+    "active": true
+  },
+  {
+    "id": "tratamiento-capilar",
+    "name": "Tratamiento capilar",
+    "durationMinutes": 60,
+    "price": 11000,
+    "category": "Tratamientos",
+    "professionals": [
+      "Ana López",
+      "Bruno Ledesma"
+    ],
+    "description": "Shock de nutrición profunda con keratina y masaje relajante.",
+    "active": true
+  },
+  {
+    "id": "corte-barba",
+    "name": "Corte + barba",
+    "durationMinutes": 70,
+    "price": 9200,
+    "category": "Barbería",
+    "professionals": [
+      "Martín Pérez",
+      "Bruno Ledesma"
+    ],
+    "description": "Corte con degradado, mantenimiento de barba y toalla caliente.",
+    "active": true
+  },
+  {
+    "id": "semipermanente",
+    "name": "Semipermanente Luxe",
+    "durationMinutes": 70,
+    "price": 9800,
+    "category": "Manicuría",
+    "professionals": [
+      "Paula Quinteros"
+    ],
+    "description": "Preparación completa, esmaltado premium y sellado de brillo.",
+    "active": true
+  },
+  {
+    "id": "514acf79-87c3-429a-b0a4-3bc5ea3c48dc",
+    "name": "Corte corto",
+    "durationMinutes": 15,
+    "price": 5000,
+    "category": "Estilos",
+    "professionals": [
+      "Ana López",
+      "Martín Pérez",
+      "Paula Quinteros",
+      "Bruno Ledesma",
+      "Fabri Molina",
+      "Joaquin Romero"
+    ],
+    "description": "",
+    "active": true
+  }
+]

@@ -2,10 +2,16 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import brandLogo from '../assets/Logo_AC-removebg-preview.png';
 import { useAuth } from './context/AuthContext.jsx';
 import LoginView from './components/LoginView.jsx';
-import { fetchWeeklySchedule } from './api/appointments.js';
+import { fetchWeeklySchedule, fetchMonthSummary, cancelAppointment } from './api/appointments.js';
 import { fetchMonthlyMetrics } from './api/metrics.js';
-import { fetchServices } from './api/services.js';
-import { fetchStaff, createStaffMember, deleteStaffMember } from './api/staff.js';
+import { fetchServices, createService, updateService, deleteService } from './api/services.js';
+import {
+  fetchStaff,
+  createStaffMember,
+  deleteStaffMember,
+  updateStaffSchedule,
+  updateStaffMember,
+} from './api/staff.js';
 import { fetchAdmins, createAdmin } from './api/superadmin.js';
 
 const DEFAULT_STAFF_AVATAR =
@@ -33,9 +39,67 @@ const weekRangeFormatter = new Intl.DateTimeFormat('es-AR', { day: 'numeric', mo
 const EMPTY_STAFF_FORM = {
   name: '',
   role: '',
-  availability: '',
+  availabilityDays: [1, 2, 3, 4, 5, 6, 0],
   specialties: '',
   avatar: '',
+  scheduleMode: 'continuous',
+  defaultStart: '09:00',
+  defaultEnd: '17:00',
+  shift1Start: '09:00',
+  shift1End: '13:00',
+  shift2Start: '15:00',
+  shift2End: '19:00',
+  slotDurationMinutes: 45,
+};
+
+const WEEK_DAYS = [
+  { value: 1, label: 'Lun', full: 'Lunes' },
+  { value: 2, label: 'Mar', full: 'Martes' },
+  { value: 3, label: 'Mie', full: 'Miércoles' },
+  { value: 4, label: 'Jue', full: 'Jueves' },
+  { value: 5, label: 'Vie', full: 'Viernes' },
+  { value: 6, label: 'Sab', full: 'Sábado' },
+  { value: 0, label: 'Dom', full: 'Domingo' },
+];
+
+function parseAvailabilityDays(text) {
+  if (!text || typeof text !== 'string') return null;
+  const normalized = text.toLowerCase();
+  const matches = WEEK_DAYS.filter((day) => normalized.includes(day.full.toLowerCase()));
+  if (matches.length) {
+    return matches.map((day) => day.value);
+  }
+  return null;
+}
+
+function formatAvailabilityLabel(days, schedule) {
+  const dayLabels = WEEK_DAYS.filter((day) => days.includes(day.value)).map((day) => day.full);
+  const dayText = dayLabels.length ? dayLabels.join(', ') : 'Sin días';
+  if (schedule?.mode === 'split') {
+    const shift1 = schedule.shift1Start && schedule.shift1End ? `${schedule.shift1Start} a ${schedule.shift1End}` : '';
+    const shift2 = schedule.shift2Start && schedule.shift2End ? `${schedule.shift2Start} a ${schedule.shift2End}` : '';
+    const shiftText = [shift1, shift2].filter(Boolean).join(' y ');
+    return `${dayText} · ${shiftText}`;
+  }
+  const start = schedule?.defaultStart || '09:00';
+  const end = schedule?.defaultEnd || '17:00';
+  return `${dayText} · ${start} a ${end}`;
+}
+
+function formatAvailabilityDays(days) {
+  const dayLabels = WEEK_DAYS.filter((day) => days.includes(day.value)).map((day) => day.full);
+  return dayLabels.join(', ');
+}
+
+const EMPTY_SERVICE_FORM = {
+  id: null,
+  name: '',
+  category: '',
+  durationMinutes: 45,
+  price: 0,
+  professionals: [],
+  description: '',
+  active: true,
 };
 
 function capitalize(value) {
@@ -43,19 +107,14 @@ function capitalize(value) {
   return value.charAt(0).toUpperCase() + value.slice(1);
 }
 
-function getStartOfWeek(date = new Date()) {
+function getStartOfDay(date = new Date()) {
   const copy = new Date(date);
-  const day = copy.getDay();
-  const diff = day === 0 ? -6 : 1 - day;
-  copy.setDate(copy.getDate() + diff);
   copy.setHours(0, 0, 0, 0);
   return copy;
 }
 
 function buildWeeklySchedule(scheduleMap, referenceDate = new Date()) {
-  const isoDates = Object.keys(scheduleMap ?? {});
-  const baseDate = isoDates.length ? new Date(isoDates[0]) : referenceDate;
-  const start = getStartOfWeek(baseDate);
+  const start = getStartOfDay(referenceDate);
 
   return Array.from({ length: 7 }, (_, index) => {
     const currentDate = new Date(start);
@@ -140,13 +199,9 @@ function DashboardView({
   onSelectAppointment,
   monthlyMetrics,
   kpiCards,
+  weekPaidRevenue,
+  weekCancelledCount,
 }) {
-  const totalRevenue = weeklySchedule.reduce((acc, day) => acc + (day.metrics.revenue || 0), 0);
-  const totalConfirmed = weeklySchedule.reduce(
-    (acc, day) => acc + (day.metrics.confirmado || 0),
-    0
-  );
-
   const weekRangeLabel =
     weeklySchedule.length > 0
       ? `${weekRangeFormatter.format(weeklySchedule[0].date)} · ${weekRangeFormatter.format(
@@ -167,13 +222,13 @@ function DashboardView({
         ))}
         <article className="kpi-card is-accent">
           <span className="kpi-label">Ingresos estimados semanal</span>
-          <strong className="kpi-value">{currencyFormatter.format(totalRevenue)}</strong>
-          <small className="kpi-helper">Confirmados + señas tomadas</small>
+          <strong className="kpi-value">{currencyFormatter.format(weekPaidRevenue)}</strong>
+          <small className="kpi-helper">Confirmados y pagos</small>
         </article>
         <article className="kpi-card is-accent">
-          <span className="kpi-label">Turnos confirmados</span>
-          <strong className="kpi-value">{totalConfirmed}</strong>
-          <small className="kpi-helper">Distribuidos en toda la semana</small>
+          <span className="kpi-label">Turnos cancelados en la semana</span>
+          <strong className="kpi-value">{weekCancelledCount}</strong>
+          <small className="kpi-helper">Cancelados dentro de la semana visible</small>
         </article>
       </section>
 
@@ -225,7 +280,13 @@ function DashboardView({
   );
 }
 
-function AgendaPanel({ selectedDay, selectedAppointmentId, onSelectAppointment }) {
+function AgendaPanel({
+  selectedDay,
+  selectedAppointmentId,
+  onSelectAppointment,
+  onCancelAppointment,
+  cancellingAppointmentId,
+}) {
   return (
     <div className="agenda-panel">
       <div className="agenda-list">
@@ -271,6 +332,8 @@ function AgendaPanel({ selectedDay, selectedAppointmentId, onSelectAppointment }
         <div className="agenda-details">
           <AppointmentDetails
             appointment={selectedDay.appointments.find((item) => item.id === selectedAppointmentId)}
+            onCancel={onCancelAppointment}
+            cancellingId={cancellingAppointmentId}
           />
         </div>
       )}
@@ -285,6 +348,11 @@ function AppointmentsView({
   selectedDay,
   selectedAppointmentId,
   onSelectAppointment,
+  staff,
+  staffFilter,
+  onChangeStaffFilter,
+  onCancelAppointment,
+  cancellingAppointmentId,
 }) {
   return (
     <div className="appointments-view">
@@ -293,6 +361,22 @@ function AppointmentsView({
           <div>
             <h2>Turnos de la semana</h2>
             <p>Explorá agenda, confirmá o reprogramá según disponibilidad.</p>
+          </div>
+          <div className="filters-inline">
+            <label className="inline-select">
+              <span>Filtrar por profesional</span>
+              <select
+                value={staffFilter}
+                onChange={(event) => onChangeStaffFilter?.(event.target.value)}
+              >
+                <option value="">Todos</option>
+                {staff?.map((member) => (
+                  <option key={member.id} value={member.id}>
+                    {member.name}
+                  </option>
+                ))}
+              </select>
+            </label>
           </div>
         </header>
 
@@ -315,13 +399,15 @@ function AppointmentsView({
           selectedDay={selectedDay}
           selectedAppointmentId={selectedAppointmentId}
           onSelectAppointment={onSelectAppointment}
+          onCancelAppointment={onCancelAppointment}
+          cancellingAppointmentId={cancellingAppointmentId}
         />
       </section>
     </div>
   );
 }
 
-function AppointmentDetails({ appointment }) {
+function AppointmentDetails({ appointment, onCancel, cancellingId }) {
   if (!appointment) {
     return (
       <div className="appointment-empty">
@@ -329,6 +415,8 @@ function AppointmentDetails({ appointment }) {
       </div>
     );
   }
+
+  const isCancelling = cancellingId === appointment.id;
 
   return (
     <div className="appointment-details">
@@ -376,6 +464,16 @@ function AppointmentDetails({ appointment }) {
         <h4>Notas</h4>
         <p>{appointment.notes || 'Sin notas adicionales.'}</p>
       </section>
+      {onCancel && appointment.status !== 'cancelled' && (
+        <button
+          type="button"
+          className="secondary-button"
+          onClick={() => onCancel(appointment.id)}
+          disabled={isCancelling}
+        >
+          {isCancelling ? 'Anulando...' : 'Anular turno'}
+        </button>
+      )}
     </div>
   );
 }
@@ -436,17 +534,46 @@ function ServicesView({
   isStaffEditorActive,
   onToggleStaffEditor,
   onCreateStaff,
+  onUpdateStaff,
   isCreatingStaff,
+  isUpdatingStaff,
   onDeleteStaff,
   deletingStaffId,
   staffActionError,
   onDismissStaffError,
+  onUpdateStaffSchedule,
+  isUpdatingSchedule,
+  scheduleActionError,
+  onCreateService,
+  onUpdateService,
+  onDeleteService,
+  serviceActionError,
+  isSavingService,
+  deletingServiceId,
 }) {
   const [formState, setFormState] = useState(EMPTY_STAFF_FORM);
   const [formError, setFormError] = useState(null);
   const [formSuccess, setFormSuccess] = useState(null);
   const [avatarPreview, setAvatarPreview] = useState('');
   const [isProcessingAvatar, setIsProcessingAvatar] = useState(false);
+  const [editingStaffId, setEditingStaffId] = useState(null);
+  const [isStaffManageMode, setIsStaffManageMode] = useState(false);
+  const [overrideForm, setOverrideForm] = useState({
+    staffId: '',
+    date: '',
+    start: '',
+    end: '',
+    closed: false,
+    slotDurationMinutes: '',
+  });
+  const [serviceForm, setServiceForm] = useState(EMPTY_SERVICE_FORM);
+  const [isServiceFormVisible, setIsServiceFormVisible] = useState(false);
+  const [editingServiceId, setEditingServiceId] = useState(null);
+  const [pendingDeleteStaff, setPendingDeleteStaff] = useState(null);
+  const [pendingDeleteService, setPendingDeleteService] = useState(null);
+  const selectedProfessionalsLabel = serviceForm.professionals.length
+    ? serviceForm.professionals.join(', ')
+    : 'Seleccionar profesionales';
 
   useEffect(() => {
     if (!isStaffEditorActive) {
@@ -454,6 +581,7 @@ function ServicesView({
       setFormError(null);
       setFormSuccess(null);
       setAvatarPreview('');
+      setEditingStaffId(null);
     }
   }, [isStaffEditorActive]);
 
@@ -462,6 +590,28 @@ function ServicesView({
     setFormState((prev) => ({ ...prev, [name]: value }));
     setFormError(null);
     setFormSuccess(null);
+  };
+
+  const handleToggleAvailabilityDay = (dayValue) => {
+    setFormState((prev) => {
+      const next = new Set(prev.availabilityDays);
+      if (next.has(dayValue)) {
+        next.delete(dayValue);
+      } else {
+        next.add(dayValue);
+      }
+      return {
+        ...prev,
+        availabilityDays: Array.from(next),
+      };
+    });
+  };
+
+  const handleScheduleModeChange = (mode) => {
+    setFormState((prev) => ({
+      ...prev,
+      scheduleMode: mode,
+    }));
   };
 
   const resizeImageFile = (file, maxSize = 256) =>
@@ -528,42 +678,298 @@ function ServicesView({
     setFormSuccess(null);
   };
 
+  const handleOverrideFieldChange = (event) => {
+    const { name, value, type, checked } = event.target;
+    setOverrideForm((prev) => ({
+      ...prev,
+      [name]: type === 'checkbox' ? checked : value,
+    }));
+  };
+
+  const handleSubmitOverride = async (event) => {
+    event.preventDefault();
+    if (!onUpdateStaffSchedule) return;
+    if (!overrideForm.staffId || !overrideForm.date) {
+      setFormError('Elegí un profesional y la fecha a editar.');
+      return;
+    }
+
+    const target = staff.find((member) => member.id === overrideForm.staffId);
+    const currentOverrides = target?.workSchedule?.overrides || {};
+    const nextOverrides = { ...currentOverrides };
+
+    if (overrideForm.closed) {
+      nextOverrides[overrideForm.date] = { closed: true };
+    } else if (overrideForm.start && overrideForm.end) {
+      nextOverrides[overrideForm.date] = { start: overrideForm.start, end: overrideForm.end };
+    } else {
+      setFormError('Indicá horario de inicio y fin, o marcá como día cerrado.');
+      return;
+    }
+
+    try {
+      await onUpdateStaffSchedule({
+        staffId: overrideForm.staffId,
+        overrides: nextOverrides,
+        slotDurationMinutes: Number(overrideForm.slotDurationMinutes) || undefined,
+      });
+      setOverrideForm({
+        staffId: overrideForm.staffId,
+        date: '',
+        start: '',
+        end: '',
+        closed: false,
+        slotDurationMinutes: '',
+      });
+      setFormError(null);
+      setFormSuccess('Disponibilidad actualizada.');
+    } catch (error) {
+      setFormError(error.message || 'No se pudo actualizar la disponibilidad.');
+    }
+  };
+
+  const handleEditStaffClick = (member) => {
+    if (!member) return;
+    if (!isStaffManageMode) {
+      setIsStaffManageMode(true);
+    }
+    if (!isStaffEditorActive) {
+      onToggleStaffEditor();
+    }
+    setEditingStaffId(member.id);
+    const parsedDays = parseAvailabilityDays(member.availability);
+    const availabilityDays = Array.isArray(member.workSchedule?.availabilityDays)
+      ? member.workSchedule.availabilityDays
+      : parsedDays || EMPTY_STAFF_FORM.availabilityDays;
+    setFormState({
+      name: member.name || '',
+      role: member.role || '',
+      availabilityDays,
+      specialties: Array.isArray(member.specialties) ? member.specialties.join(', ') : '',
+      avatar: member.avatar || '',
+      scheduleMode: member.workSchedule?.mode === 'split' ? 'split' : 'continuous',
+      defaultStart: member.workSchedule?.defaultStart || '09:00',
+      defaultEnd: member.workSchedule?.defaultEnd || '17:00',
+      shift1Start: member.workSchedule?.shift1Start || '09:00',
+      shift1End: member.workSchedule?.shift1End || '13:00',
+      shift2Start: member.workSchedule?.shift2Start || '15:00',
+      shift2End: member.workSchedule?.shift2End || '19:00',
+      slotDurationMinutes: member.slotDurationMinutes || 45,
+    });
+    setFormError(null);
+    setFormSuccess(null);
+    setAvatarPreview(member.avatar || '');
+  };
+
+  const handleServiceFieldChange = (event) => {
+    const { name, value } = event.target;
+    setServiceForm((prev) => ({
+      ...prev,
+      [name]: value,
+    }));
+  };
+
+  const handleToggleServiceActive = () => {
+    setServiceForm((prev) => ({
+      ...prev,
+      active: !prev.active,
+    }));
+  };
+
+  const handleToggleProfessional = (professionalName) => {
+    setServiceForm((prev) => {
+      const next = new Set(prev.professionals);
+      if (next.has(professionalName)) {
+        next.delete(professionalName);
+      } else {
+        next.add(professionalName);
+      }
+      return {
+        ...prev,
+        professionals: Array.from(next),
+      };
+    });
+  };
+
+  const handleSubmitService = async (event) => {
+    event.preventDefault();
+    if (!onCreateService || !onUpdateService) return;
+
+    if (!serviceForm.name.trim()) {
+      setFormError('Ingresá un nombre de servicio.');
+      return;
+    }
+
+    const isEditing = Boolean(editingServiceId);
+    const payload = {
+      name: serviceForm.name.trim(),
+      category: serviceForm.category.trim(),
+      durationMinutes: Number(serviceForm.durationMinutes) || 30,
+      price: Number(serviceForm.price) || 0,
+      professionals: serviceForm.professionals,
+      description: serviceForm.description.trim(),
+      active: serviceForm.active,
+    };
+
+    try {
+      if (editingServiceId) {
+        await onUpdateService({ serviceId: editingServiceId, service: payload });
+        setFormSuccess('Servicio actualizado.');
+      } else {
+        await onCreateService(payload);
+        setFormSuccess('Servicio creado.');
+      }
+      setServiceForm(EMPTY_SERVICE_FORM);
+      setEditingServiceId(null);
+      if (!isEditing) {
+        setIsServiceFormVisible(false);
+      }
+    } catch (error) {
+      setFormError(error.message || 'No se pudo guardar el servicio.');
+    }
+  };
+
+  const handleEditService = (service) => {
+    setEditingServiceId(service.id);
+    setIsServiceFormVisible(true);
+    setServiceForm({
+      id: service.id,
+      name: service.name || '',
+      category: service.category || '',
+      durationMinutes: service.durationMinutes || 30,
+      price: service.price || 0,
+      professionals: Array.isArray(service.professionals) ? service.professionals : [],
+      description: service.description || '',
+      active: service.active !== false,
+    });
+    setFormError(null);
+    setFormSuccess(null);
+  };
+
+  const handleStartNewService = () => {
+    setServiceForm(EMPTY_SERVICE_FORM);
+    setEditingServiceId(null);
+    setFormError(null);
+    setFormSuccess(null);
+    setIsServiceFormVisible(true);
+  };
+
+  const handleCancelServiceForm = () => {
+    setEditingServiceId(null);
+    setServiceForm(EMPTY_SERVICE_FORM);
+    setFormError(null);
+    setFormSuccess(null);
+    setIsServiceFormVisible(false);
+  };
+
+  const handleDeleteService = async (id) => {
+    if (!onDeleteService) return;
+    try {
+      await onDeleteService(id);
+    } catch (error) {
+      setFormError(error.message || 'No se pudo eliminar el servicio.');
+    }
+  };
+
+  const handleConfirmDeleteService = async () => {
+    if (!pendingDeleteService) return;
+    await handleDeleteService(pendingDeleteService.id);
+    setPendingDeleteService(null);
+  };
+
   const handleSubmit = async (event) => {
     event.preventDefault();
     setFormError(null);
     setFormSuccess(null);
 
+    if (!formState.name.trim()) {
+      setFormError('Ingresá un nombre.');
+      return;
+    }
+
+    if (!formState.availabilityDays.length) {
+      setFormError('Seleccioná al menos un día de disponibilidad.');
+      return;
+    }
+
+    const parseMinutes = (value) => {
+      const [hours = '0', minutes = '0'] = value.split(':');
+      return (parseInt(hours, 10) || 0) * 60 + (parseInt(minutes, 10) || 0);
+    };
+
+    if (formState.scheduleMode === 'continuous') {
+      const startMinutes = parseMinutes(formState.defaultStart || '09:00');
+      const endMinutes = parseMinutes(formState.defaultEnd || '17:00');
+      if (endMinutes <= startMinutes) {
+        setFormError('El horario fin debe ser mayor al inicio.');
+        return;
+      }
+    } else {
+      const firstStart = parseMinutes(formState.shift1Start || '09:00');
+      const firstEnd = parseMinutes(formState.shift1End || '13:00');
+      const secondStart = parseMinutes(formState.shift2Start || '15:00');
+      const secondEnd = parseMinutes(formState.shift2End || '19:00');
+      if (firstEnd <= firstStart || secondEnd <= secondStart) {
+        setFormError('El horario fin debe ser mayor al inicio en cada turno.');
+        return;
+      }
+    }
+
+    const availabilityText = formatAvailabilityLabel(formState.availabilityDays, {
+      mode: formState.scheduleMode,
+      defaultStart: formState.defaultStart,
+      defaultEnd: formState.defaultEnd,
+      shift1Start: formState.shift1Start,
+      shift1End: formState.shift1End,
+      shift2Start: formState.shift2Start,
+      shift2End: formState.shift2End,
+    });
+
     const payload = {
       name: formState.name.trim(),
       role: formState.role.trim(),
-      availability: formState.availability.trim(),
+      availability: availabilityText,
       avatar: formState.avatar.trim(),
       specialties: formState.specialties
         .split(',')
         .map((item) => item.trim())
         .filter((item) => item.length > 0),
+      slotDurationMinutes: Number(formState.slotDurationMinutes) || 45,
+      workSchedule: {
+        mode: formState.scheduleMode,
+        availabilityDays: formState.availabilityDays,
+        defaultStart: formState.defaultStart || '09:00',
+        defaultEnd: formState.defaultEnd || '17:00',
+        shift1Start: formState.shift1Start || '09:00',
+        shift1End: formState.shift1End || '13:00',
+        shift2Start: formState.shift2Start || '15:00',
+        shift2End: formState.shift2End || '19:00',
+      },
     };
 
-    if (!payload.name) {
-      setFormError('Ingresá un nombre.');
-      return;
-    }
-
     try {
-      await onCreateStaff(payload);
-      setFormSuccess('Profesional agregado correctamente.');
+      if (editingStaffId) {
+        await onUpdateStaff({ staffId: editingStaffId, staff: payload });
+        setFormSuccess('Profesional actualizado correctamente.');
+      } else {
+        await onCreateStaff(payload);
+        setFormSuccess('Profesional agregado correctamente.');
+      }
       setFormState(EMPTY_STAFF_FORM);
       setAvatarPreview('');
+      setEditingStaffId(null);
     } catch (error) {
-      setFormError(error.message || 'No se pudo crear el profesional.');
+      setFormError(error.message || 'No se pudo guardar el profesional.');
     }
   };
 
-  const handleDeleteStaff = (memberId) => {
-    if (!onDeleteStaff) return;
-    onDeleteStaff(memberId).catch(() => {
-      /* Error manejado por el estado global */
-    });
+  const handleConfirmDeleteStaff = async () => {
+    if (!pendingDeleteStaff) return;
+    try {
+      await onDeleteStaff?.(pendingDeleteStaff.id);
+    } finally {
+      setPendingDeleteStaff(null);
+    }
   };
 
   const handleToggle = () => {
@@ -579,9 +985,18 @@ function ServicesView({
             <h2>Peluqueros y staff</h2>
             <p>Gestioná tu equipo, roles y disponibilidad.</p>
           </div>
-          <button type="button" className="secondary-button" onClick={handleToggle}>
-            {isStaffEditorActive ? 'Finalizar edición' : 'Añadir profesional'}
-          </button>
+          <div className="header-actions">
+            <button type="button" className="secondary-button" onClick={handleToggle}>
+              {isStaffEditorActive ? 'Finalizar edición' : 'Añadir profesional'}
+            </button>
+            <button
+              type="button"
+              className={`secondary-button${isStaffManageMode ? ' is-active' : ''}`}
+              onClick={() => setIsStaffManageMode((prev) => !prev)}
+            >
+              {isStaffManageMode ? 'Salir de edición' : 'Editar personal'}
+            </button>
+          </div>
         </header>
 
         {isStaffEditorActive && (
@@ -609,18 +1024,119 @@ function ServicesView({
                   disabled={isCreatingStaff}
                 />
               </div>
-              <div className="form-field">
-                <label htmlFor="staff-availability">Disponibilidad</label>
+              <div className="form-field is-full">
+                <label>Disponibilidad semanal</label>
+                <div className="availability-grid">
+                  {WEEK_DAYS.map((day) => (
+                    <button
+                      key={day.value}
+                      type="button"
+                      className={`availability-day${
+                        formState.availabilityDays.includes(day.value) ? ' is-active' : ''
+                      }`}
+                      onClick={() => handleToggleAvailabilityDay(day.value)}
+                      disabled={isCreatingStaff}
+                    >
+                      {day.label}
+                    </button>
+                  ))}
+                </div>
+                <p className="form-helper">Seleccioná los días que trabaja este profesional.</p>
+              </div>
+              <div className="form-field is-full">
+                <label>Horario</label>
+                <div className="toggle-group">
+                  <button
+                    type="button"
+                    className={`toggle-button${formState.scheduleMode === 'continuous' ? ' is-active' : ''}`}
+                    onClick={() => handleScheduleModeChange('continuous')}
+                    disabled={isCreatingStaff}
+                  >
+                    Horario corrido
+                  </button>
+                  <button
+                    type="button"
+                    className={`toggle-button${formState.scheduleMode === 'split' ? ' is-active' : ''}`}
+                    onClick={() => handleScheduleModeChange('split')}
+                    disabled={isCreatingStaff}
+                  >
+                    Por turnos
+                  </button>
+                </div>
+                {formState.scheduleMode === 'continuous' ? (
+                  <div className="inline-fields">
+                    <input
+                      type="time"
+                      name="defaultStart"
+                      value={formState.defaultStart}
+                      onChange={handleFieldChange}
+                      disabled={isCreatingStaff}
+                    />
+                    <span className="inline-separator">a</span>
+                    <input
+                      type="time"
+                      name="defaultEnd"
+                      value={formState.defaultEnd}
+                      onChange={handleFieldChange}
+                      disabled={isCreatingStaff}
+                    />
+                  </div>
+                ) : (
+                  <div className="schedule-split">
+                    <div className="inline-fields">
+                      <span className="inline-label">Turno mañana</span>
+                      <input
+                        type="time"
+                        name="shift1Start"
+                        value={formState.shift1Start}
+                        onChange={handleFieldChange}
+                        disabled={isCreatingStaff}
+                      />
+                      <span className="inline-separator">a</span>
+                      <input
+                        type="time"
+                        name="shift1End"
+                        value={formState.shift1End}
+                        onChange={handleFieldChange}
+                        disabled={isCreatingStaff}
+                      />
+                    </div>
+                    <div className="inline-fields">
+                      <span className="inline-label">Turno tarde</span>
+                      <input
+                        type="time"
+                        name="shift2Start"
+                        value={formState.shift2Start}
+                        onChange={handleFieldChange}
+                        disabled={isCreatingStaff}
+                      />
+                      <span className="inline-separator">a</span>
+                      <input
+                        type="time"
+                        name="shift2End"
+                        value={formState.shift2End}
+                        onChange={handleFieldChange}
+                        disabled={isCreatingStaff}
+                      />
+                    </div>
+                  </div>
+                )}
+                <p className="form-helper">Definí el horario de atención semanal.</p>
+              </div>
+              <div className="form-field is-wide">
+                <label htmlFor="staff-slot-duration">Duración por turno (minutos)</label>
                 <input
-                  id="staff-availability"
-                  name="availability"
-                  placeholder="Lunes a viernes · 10:00 a 18:00"
-                  value={formState.availability}
+                  id="staff-slot-duration"
+                  name="slotDurationMinutes"
+                  type="number"
+                  min="10"
+                  step="5"
+                  value={formState.slotDurationMinutes}
                   onChange={handleFieldChange}
                   disabled={isCreatingStaff}
                 />
               </div>
-              <div className="form-field">
+              <div className="form-field is-wide">
                 <label htmlFor="staff-specialties">Especialidades (separadas por coma)</label>
                 <input
                   id="staff-specialties"
@@ -631,7 +1147,7 @@ function ServicesView({
                   disabled={isCreatingStaff}
                 />
               </div>
-              <div className="form-field">
+              <div className="form-field is-wide">
                 <label htmlFor="staff-avatar">Foto (opcional)</label>
                 <div className="staff-avatar-upload">
                   <div className="staff-avatar-preview">
@@ -710,25 +1226,23 @@ function ServicesView({
 
         {staff.length ? (
           <div className="staff-grid">
-            {staff.map((member) => (
-              <article key={member.id} className="staff-card">
-                {isStaffEditorActive && (
-                  <button
-                    type="button"
-                    className={`staff-delete-button${deletingStaffId === member.id ? ' is-loading' : ''}`}
-                    onClick={() => handleDeleteStaff(member.id)}
-                    disabled={deletingStaffId === member.id}
-                    aria-label={`Eliminar a ${member.name}`}
-                  >
-                    <svg width="16" height="16" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-                      <path
-                        fill="currentColor"
-                        d="M9 3h6l1 2h4v2H4V5h4l1-2zm2 8v7h2v-7h-2zm-4 0v7h2v-7H7zm8 0v7h2v-7h-2z"
-                      />
-                    </svg>
-                    <span className="sr-only">Eliminar {member.name}</span>
-                  </button>
-                )}
+            {staff.map((member) => {
+              const schedule = member.workSchedule || {};
+              const scheduleSummary =
+                schedule.mode === 'split'
+                  ? `${schedule.shift1Start || '09:00'} a ${schedule.shift1End || '13:00'} y ${schedule.shift2Start || '15:00'} a ${
+                      schedule.shift2End || '19:00'
+                    }`
+                  : `${schedule.defaultStart || '09:00'} a ${schedule.defaultEnd || '17:00'}`;
+              const availabilityDays = Array.isArray(schedule.availabilityDays)
+                ? schedule.availabilityDays
+                : parseAvailabilityDays(member.availability) || [];
+              const availabilityDaysText = availabilityDays.length
+                ? formatAvailabilityDays(availabilityDays)
+                : member.availability || '';
+
+              return (
+                <article key={member.id} className="staff-card">
                 <img
                   src={member.avatar || DEFAULT_STAFF_AVATAR}
                   alt={member.name}
@@ -737,6 +1251,8 @@ function ServicesView({
                 <div className="staff-main">
                   <strong>{member.name}</strong>
                   <span className="staff-role">{member.role}</span>
+                  <span className="staff-availability">Turnos de {member.slotDurationMinutes || 45} min</span>
+                  <span className="staff-availability">{scheduleSummary}</span>
                   {member.specialties?.length ? (
                     <ul>
                       {member.specialties.map((item) => (
@@ -746,19 +1262,77 @@ function ServicesView({
                   ) : (
                     <p className="staff-hint">Sumá especialidades para destacar sus servicios.</p>
                   )}
-                  {member.availability ? (
-                    <span className="staff-availability">{member.availability}</span>
+                  {availabilityDaysText ? (
+                    <span className="staff-availability">{availabilityDaysText}</span>
                   ) : (
                     <span className="staff-availability is-muted">Horarios sin definir</span>
                   )}
+                  {isStaffManageMode && (
+                    <div className="staff-actions">
+                      <button
+                        type="button"
+                        className="secondary-button small"
+                        onClick={() => handleEditStaffClick(member)}
+                        disabled={isCreatingStaff || isUpdatingStaff}
+                      >
+                        Editar
+                      </button>
+                      <button
+                        type="button"
+                        className={`staff-delete-button${deletingStaffId === member.id ? ' is-loading' : ''}`}
+                        onClick={() => setPendingDeleteStaff(member)}
+                        disabled={deletingStaffId === member.id}
+                        aria-label={`Eliminar a ${member.name}`}
+                      >
+                        <svg width="16" height="16" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                          <path
+                            fill="currentColor"
+                            d="M9 3h6l1 2h4v2H4V5h4l1-2zm2 8v7h2v-7h-2zm-4 0v7h2v-7H7zm8 0v7h2v-7h-2z"
+                          />
+                        </svg>
+                        <span className="sr-only">Eliminar {member.name}</span>
+                      </button>
+                    </div>
+                  )}
                 </div>
               </article>
-            ))}
+              );
+            })}
           </div>
         ) : (
           <p className="empty-state">Aún no cargaste profesionales. Sumá uno desde el backend.</p>
         )}
       </section>
+
+      {pendingDeleteStaff && (
+        <div className="modal-overlay" role="presentation">
+          <div className="modal-card modal-alert" role="dialog" aria-modal="true">
+            <h3>Eliminar profesional</h3>
+            <p>
+              La eliminación de {pendingDeleteStaff.name} no puede deshacerse. ¿Seguro que querés
+              eliminarlo?
+            </p>
+            <div className="modal-actions">
+              <button
+                type="button"
+                className="secondary-button"
+                onClick={() => setPendingDeleteStaff(null)}
+                disabled={deletingStaffId === pendingDeleteStaff.id}
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                className="danger-button"
+                onClick={handleConfirmDeleteStaff}
+                disabled={deletingStaffId === pendingDeleteStaff.id}
+              >
+                {deletingStaffId === pendingDeleteStaff.id ? 'Eliminando...' : 'Eliminar'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       <section className="card">
         <header className="card-header">
@@ -766,10 +1340,131 @@ function ServicesView({
             <h2>Catálogo de servicios</h2>
             <p>Definí tiempos, precios y profesionales asignados.</p>
           </div>
-          <button type="button" className="secondary-button">
-            Nuevo servicio
-          </button>
         </header>
+
+        {isServiceFormVisible ? (
+          <form className="service-form" onSubmit={handleSubmitService}>
+            <div className="form-grid">
+              <div className="form-field">
+                <label htmlFor="service-name">Nombre *</label>
+                <input
+                  id="service-name"
+                  name="name"
+                  value={serviceForm.name}
+                  onChange={handleServiceFieldChange}
+                  disabled={isSavingService}
+                />
+              </div>
+              <div className="form-field">
+                <label htmlFor="service-category">Categoría</label>
+                <input
+                  id="service-category"
+                  name="category"
+                  value={serviceForm.category}
+                  onChange={handleServiceFieldChange}
+                  disabled={isSavingService}
+                />
+              </div>
+              <div className="form-field">
+                <label htmlFor="service-duration">Duración (min)</label>
+                <input
+                  id="service-duration"
+                  name="durationMinutes"
+                  type="number"
+                  min="5"
+                  step="5"
+                  value={serviceForm.durationMinutes}
+                  onChange={handleServiceFieldChange}
+                  disabled={isSavingService}
+                />
+              </div>
+              <div className="form-field">
+                <label htmlFor="service-price">Precio</label>
+                <input
+                  id="service-price"
+                  name="price"
+                  type="number"
+                  min="0"
+                  step="100"
+                  value={serviceForm.price}
+                  onChange={handleServiceFieldChange}
+                  disabled={isSavingService}
+                />
+              </div>
+              <div className="form-field">
+                <label>Profesionales</label>
+                <details className="multi-select">
+                  <summary>{selectedProfessionalsLabel}</summary>
+                  <div className="multi-select-list">
+                    {staff.length ? (
+                      staff.map((member) => (
+                        <label key={member.id} className="multi-select-item">
+                          <input
+                            type="checkbox"
+                            checked={serviceForm.professionals.includes(member.name)}
+                            onChange={() => handleToggleProfessional(member.name)}
+                            disabled={isSavingService}
+                          />
+                          <span>{member.name}</span>
+                        </label>
+                      ))
+                    ) : (
+                      <span className="multi-select-empty">No hay profesionales cargados.</span>
+                    )}
+                  </div>
+                </details>
+                <p className="form-helper">Seleccioná a quiénes pueden realizar este servicio.</p>
+              </div>
+              <div className="form-field">
+                <label>Estado</label>
+                <button
+                  type="button"
+                  className={`secondary-button${serviceForm.active ? ' is-active' : ''}`}
+                  onClick={handleToggleServiceActive}
+                  disabled={isSavingService}
+                >
+                  {serviceForm.active ? 'Inhabilitar servicio' : 'Activar servicio'}
+                </button>
+              </div>
+              <div className="form-field is-full">
+                <label htmlFor="service-description">Descripción</label>
+                <textarea
+                  id="service-description"
+                  name="description"
+                  rows={3}
+                  value={serviceForm.description}
+                  onChange={handleServiceFieldChange}
+                  disabled={isSavingService}
+                />
+              </div>
+            </div>
+            <div className="form-actions">
+              <button type="submit" className="primary-button" disabled={isSavingService}>
+                {isSavingService ? 'Guardando...' : editingServiceId ? 'Actualizar servicio' : 'Crear servicio'}
+              </button>
+              <button
+                type="button"
+                className="secondary-button"
+                onClick={handleCancelServiceForm}
+                disabled={isSavingService}
+              >
+                Cancelar
+              </button>
+            </div>
+            {serviceActionError && <p className="form-error">{serviceActionError}</p>}
+          </form>
+        ) : (
+          <div className="form-actions is-left">
+            <button type="button" className="primary-button" onClick={handleStartNewService}>
+              <span className="plus-mark" aria-hidden="true">
+                <svg width="16" height="16" viewBox="0 0 24 24" focusable="false">
+                  <path fill="currentColor" d="M11 5h2v14h-2zM5 11h14v2H5z" />
+                </svg>
+              </span>
+              Crear nuevo servicio
+            </button>
+          </div>
+        )}
 
         {services.length ? (
           <div className="services-table">
@@ -778,6 +1473,7 @@ function ServicesView({
               <span>Duración</span>
               <span>Precio</span>
               <span>Profesionales</span>
+              <span>Acciones</span>
             </div>
             {services.map((service) => (
               <div key={service.id} className="services-table-row">
@@ -789,11 +1485,65 @@ function ServicesView({
                 <span>{service.durationMinutes} min</span>
                 <span>{currencyFormatter.format(service.price)}</span>
                 <span>{service.professionals?.join(', ') || 'Sin asignar'}</span>
+                <div className="service-actions">
+                  <button
+                    type="button"
+                    className="secondary-button small"
+                    onClick={() => handleEditService(service)}
+                    disabled={isSavingService}
+                  >
+                    Editar
+                  </button>
+                  <button
+                    type="button"
+                    className="danger-button"
+                    onClick={() => setPendingDeleteService(service)}
+                    disabled={deletingServiceId === service.id || isSavingService}
+                  >
+                    <svg width="16" height="16" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                      <path
+                        fill="currentColor"
+                        d="M9 3h6l1 2h4v2H4V5h4l1-2zm2 8v7h2v-7h-2zm-4 0v7h2v-7H7zm8 0v7h2v-7h-2z"
+                      />
+                    </svg>
+                    {deletingServiceId === service.id ? 'Eliminando...' : 'Eliminar'}
+                  </button>
+                </div>
               </div>
             ))}
           </div>
         ) : (
           <p className="empty-state">Aún no cargaste servicios. Creá el primero para empezar.</p>
+        )}
+
+        {pendingDeleteService && (
+          <div className="modal-overlay" role="presentation">
+            <div className="modal-card modal-alert" role="dialog" aria-modal="true">
+              <h3>Eliminar servicio</h3>
+              <p>
+                La eliminación de {pendingDeleteService.name} no puede deshacerse. ¿Seguro que querés
+                eliminarlo?
+              </p>
+              <div className="modal-actions">
+                <button
+                  type="button"
+                  className="secondary-button"
+                  onClick={() => setPendingDeleteService(null)}
+                  disabled={deletingServiceId === pendingDeleteService.id}
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="button"
+                  className="danger-button"
+                  onClick={handleConfirmDeleteService}
+                  disabled={deletingServiceId === pendingDeleteService.id}
+                >
+                  {deletingServiceId === pendingDeleteService.id ? 'Eliminando...' : 'Eliminar'}
+                </button>
+              </div>
+            </div>
+          </div>
         )}
       </section>
     </div>
@@ -1105,9 +1855,11 @@ export default function App() {
   const [weeklySchedule, setWeeklySchedule] = useState([]);
   const [selectedDayId, setSelectedDayId] = useState('');
   const [selectedAppointmentId, setSelectedAppointmentId] = useState(null);
+  const [appointmentStaffFilter, setAppointmentStaffFilter] = useState('');
   const [services, setServices] = useState([]);
   const [staff, setStaff] = useState([]);
   const [monthlyMetrics, setMonthlyMetrics] = useState([]);
+  const [monthSummary, setMonthSummary] = useState({ confirmedRevenue: 0 });
   const [isLoadingData, setIsLoadingData] = useState(false);
   const [dataError, setDataError] = useState(null);
   const [admins, setAdmins] = useState([]);
@@ -1116,12 +1868,56 @@ export default function App() {
   const [isCreatingAdmin, setIsCreatingAdmin] = useState(false);
   const [isStaffEditorActive, setIsStaffEditorActive] = useState(false);
   const [isCreatingStaff, setIsCreatingStaff] = useState(false);
+  const [isUpdatingStaff, setIsUpdatingStaff] = useState(false);
   const [staffActionError, setStaffActionError] = useState(null);
+  const [isUpdatingSchedule, setIsUpdatingSchedule] = useState(false);
+  const [scheduleActionError, setScheduleActionError] = useState(null);
   const [deletingStaffId, setDeletingStaffId] = useState(null);
+  const [cancellingAppointmentId, setCancellingAppointmentId] = useState(null);
+  const [serviceActionError, setServiceActionError] = useState(null);
+  const [isSavingService, setIsSavingService] = useState(false);
+  const [deletingServiceId, setDeletingServiceId] = useState(null);
 
   const selectedDay = useMemo(
     () => weeklySchedule.find((day) => day.isoDate === selectedDayId) ?? weeklySchedule[0] ?? null,
     [weeklySchedule, selectedDayId]
+  );
+
+  const appointmentsSchedule = useMemo(
+    () =>
+      weeklySchedule.map((day) => {
+        const appointments = appointmentStaffFilter
+          ? day.appointments.filter(
+              (item) =>
+                item.stylistId === appointmentStaffFilter ||
+                (item.stylist && item.stylist.toLowerCase().includes(appointmentStaffFilter.toLowerCase()))
+            )
+          : day.appointments;
+
+        const metrics = appointments.reduce(
+          (acc, appointment) => {
+            const statusKey = appointment.status ?? 'otros';
+            return {
+              ...acc,
+              total: acc.total + 1,
+              revenue: acc.revenue + (appointment.price || 0),
+              [statusKey]: (acc[statusKey] ?? 0) + 1,
+            };
+          },
+          { total: 0, revenue: 0 }
+        );
+
+        return { ...day, appointments, metrics };
+      }),
+    [weeklySchedule, appointmentStaffFilter]
+  );
+
+  const filteredSelectedDay = useMemo(
+    () =>
+      appointmentsSchedule.find((day) => day.isoDate === selectedDayId) ??
+      appointmentsSchedule[0] ??
+      null,
+    [appointmentsSchedule, selectedDayId]
   );
 
   useEffect(() => {
@@ -1129,6 +1925,16 @@ export default function App() {
       setSelectedAppointmentId(selectedDay.appointments[0]?.id ?? null);
     }
   }, [selectedDay]);
+
+  useEffect(() => {
+    if (!filteredSelectedDay) return;
+    setSelectedAppointmentId((prev) => {
+      if (filteredSelectedDay.appointments.some((item) => item.id === prev)) {
+        return prev;
+      }
+      return filteredSelectedDay.appointments[0]?.id ?? null;
+    });
+  }, [filteredSelectedDay]);
 
   useEffect(() => {
     if (!navItems.length) return;
@@ -1150,11 +1956,13 @@ export default function App() {
     setDataError(null);
 
     try {
-      const [scheduleResponse, metricsResponse, servicesResponse, staffResponse] = await Promise.all([
+      const [scheduleResponse, metricsResponse, servicesResponse, staffResponse, monthSummaryResponse] =
+        await Promise.all([
         fetchWeeklySchedule({ token }),
         fetchMonthlyMetrics({ token }),
         fetchServices({ token }),
         fetchStaff({ token }),
+        fetchMonthSummary({ token }),
       ]);
 
       const schedule = buildWeeklySchedule(scheduleResponse?.schedule);
@@ -1163,6 +1971,7 @@ export default function App() {
       setMonthlyMetrics(metricsResponse?.metrics ?? []);
       setServices(servicesResponse?.services ?? []);
       setStaff(staffResponse?.staff ?? []);
+      setMonthSummary(monthSummaryResponse?.summary ?? { confirmedRevenue: 0 });
     } catch (error) {
       console.error('[Admin] Error al cargar datos', error);
       setDataError(error.message || 'No se pudo cargar la información');
@@ -1229,7 +2038,7 @@ export default function App() {
   }, []);
 
   const handleCreateStaffMember = useCallback(
-    async ({ name, role, availability, specialties, avatar }) => {
+    async (payload) => {
       if (!token) {
         throw new Error('No hay sesión activa');
       }
@@ -1240,7 +2049,7 @@ export default function App() {
       try {
         const response = await createStaffMember({
           token,
-          staff: { name, role, availability, specialties, avatar },
+          staff: payload,
         });
 
         setStaff((prev) => [...prev, response.member]);
@@ -1279,46 +2088,208 @@ export default function App() {
     [token]
   );
 
+  const handleUpdateStaffMember = useCallback(
+    async ({ staffId, staff }) => {
+      if (!token) throw new Error('No hay sesión activa');
+      setIsUpdatingStaff(true);
+      setStaffActionError(null);
+      try {
+        const response = await updateStaffMember({ token, staffId, staff });
+        setStaff((prev) => prev.map((member) => (member.id === staffId ? response.staff : member)));
+        return response.staff;
+      } catch (error) {
+        const message = error.payload?.message || error.message || 'No se pudo actualizar el profesional.';
+        setStaffActionError(message);
+        throw new Error(message);
+      } finally {
+        setIsUpdatingStaff(false);
+      }
+    },
+    [token]
+  );
+
+  const handleCreateService = useCallback(
+    async (payload) => {
+      if (!token) throw new Error('No hay sesión activa');
+      setIsSavingService(true);
+      setServiceActionError(null);
+      try {
+        const response = await createService({ token, service: payload });
+        setServices((prev) => [...prev, response.service]);
+        return response.service;
+      } catch (error) {
+        const message = error.payload?.message || error.message || 'No se pudo crear el servicio.';
+        setServiceActionError(message);
+        throw new Error(message);
+      } finally {
+        setIsSavingService(false);
+      }
+    },
+    [token]
+  );
+
+  const handleUpdateService = useCallback(
+    async ({ serviceId, service }) => {
+      if (!token) throw new Error('No hay sesión activa');
+      setIsSavingService(true);
+      setServiceActionError(null);
+      try {
+        const response = await updateService({ token, serviceId, service });
+        setServices((prev) => prev.map((item) => (item.id === serviceId ? response.service : item)));
+        return response.service;
+      } catch (error) {
+        const message = error.payload?.message || error.message || 'No se pudo actualizar el servicio.';
+        setServiceActionError(message);
+        throw new Error(message);
+      } finally {
+        setIsSavingService(false);
+      }
+    },
+    [token]
+  );
+
+  const handleDeleteService = useCallback(
+    async (serviceId) => {
+      if (!token) throw new Error('No hay sesión activa');
+      setDeletingServiceId(serviceId);
+      setServiceActionError(null);
+      try {
+        await deleteService({ token, serviceId });
+        setServices((prev) => prev.filter((item) => item.id !== serviceId));
+      } catch (error) {
+        const message = error.payload?.message || error.message || 'No se pudo eliminar el servicio.';
+        setServiceActionError(message);
+        throw new Error(message);
+      } finally {
+        setDeletingServiceId(null);
+      }
+    },
+    [token]
+  );
+
+  const handleUpdateStaffSchedule = useCallback(
+    async ({ staffId, overrides, defaultStart, defaultEnd, slotDurationMinutes }) => {
+      if (!token) {
+        throw new Error('No hay sesión activa');
+      }
+      if (!staffId) {
+        throw new Error('Profesional requerido');
+      }
+
+      setIsUpdatingSchedule(true);
+      setScheduleActionError(null);
+
+      try {
+        const payload = {};
+        if (overrides) payload.overrides = overrides;
+        if (defaultStart) payload.defaultStart = defaultStart;
+        if (defaultEnd) payload.defaultEnd = defaultEnd;
+        if (typeof slotDurationMinutes === 'number') payload.slotDurationMinutes = slotDurationMinutes;
+
+        const response = await updateStaffSchedule({
+          token,
+          staffId,
+          schedule: payload,
+        });
+
+        setStaff((prev) => prev.map((member) => (member.id === staffId ? response.staff : member)));
+        return response.staff;
+      } catch (error) {
+        const message = error.payload?.message || error.message || 'No se pudo actualizar la disponibilidad.';
+        setScheduleActionError(message);
+        throw new Error(message);
+      } finally {
+        setIsUpdatingSchedule(false);
+      }
+    },
+    [token]
+  );
+
+  const handleCancelAppointment = useCallback(
+    async (appointmentId) => {
+      if (!token || !appointmentId) return;
+      setCancellingAppointmentId(appointmentId);
+      try {
+        await cancelAppointment({ token, appointmentId });
+        await loadData();
+      } catch (error) {
+        console.error('[Admin] Error al cancelar turno', error);
+      } finally {
+        setCancellingAppointmentId(null);
+      }
+    },
+    [token, loadData]
+  );
+
   const handleDismissStaffError = useCallback(() => {
     setStaffActionError(null);
+    setScheduleActionError(null);
+    setServiceActionError(null);
   }, []);
 
-  const weekRevenue = weeklySchedule.reduce((sum, day) => sum + (day.metrics.revenue || 0), 0);
-  const weekConfirmed = weeklySchedule.reduce(
-    (sum, day) => sum + (day.metrics.confirmado || 0),
-    0
-  );
-  const weekTotal = weeklySchedule.reduce((sum, day) => sum + (day.metrics.total || 0), 0);
+  const { weekConfirmedCount, weekCancelledCount, weekPaidRevenue } = useMemo(() => {
+    const paidStatuses = new Set(['confirmado', 'seña', 'pagado', 'paid']);
+    let confirmedCount = 0;
+    let cancelledCount = 0;
+    let paidRevenue = 0;
+
+    weeklySchedule.forEach((day) => {
+      day.appointments.forEach((appointment) => {
+        const status = (appointment.status || '').toString().toLowerCase();
+        if (status === 'confirmado') {
+          confirmedCount += 1;
+        }
+        if (status === 'cancelado' || status === 'cancelada' || status === 'cancelled') {
+          cancelledCount += 1;
+        }
+        if (paidStatuses.has(status)) {
+          paidRevenue += appointment.price || 0;
+        }
+      });
+    });
+
+    return {
+      weekConfirmedCount: confirmedCount,
+      weekCancelledCount: cancelledCount,
+      weekPaidRevenue: paidRevenue,
+    };
+  }, [weeklySchedule]);
+
+  const weekTotal = weekConfirmedCount + weekCancelledCount;
+
+  const monthRevenue = monthSummary.confirmedRevenue || 0;
 
   const kpiCards = useMemo(
     () => [
       {
         id: 'week-revenue',
-        label: 'Ingresos semana',
-        value: currencyFormatter.format(weekRevenue),
-        helper: 'Turnos confirmados + señas',
+        label: 'Ingresos del mes',
+        value: currencyFormatter.format(monthRevenue),
+        helper: 'Confirmados y pagos',
         highlight: true,
       },
       {
         id: 'week-confirmed',
         label: 'Turnos confirmados',
-        value: weekConfirmed.toString(),
-        helper: 'Semana en curso',
+        value: weekConfirmedCount.toString(),
+        helper: 'Semana visible',
       },
       {
         id: 'week-total',
         label: 'Turnos totales',
         value: weekTotal.toString(),
-        helper: 'Incluye pendientes y señas',
+        helper: 'Confirmados + cancelados',
       },
       {
         id: 'avg-ticket',
         label: 'Ticket promedio',
-        value: weekConfirmed ? currencyFormatter.format(Math.round(weekRevenue / weekConfirmed)) : '-',
+        value: weekConfirmedCount
+          ? currencyFormatter.format(Math.round(weekPaidRevenue / weekConfirmedCount))
+          : '-',
         helper: 'Basado en confirmados',
       },
     ],
-    [weekRevenue, weekConfirmed, weekTotal]
+    [monthRevenue, weekConfirmedCount, weekTotal, weekPaidRevenue]
   );
 
   if (status !== 'authenticated') {
@@ -1362,17 +2333,24 @@ export default function App() {
                 onSelectAppointment={setSelectedAppointmentId}
                 monthlyMetrics={monthlyMetrics}
                 kpiCards={kpiCards}
+                weekPaidRevenue={weekPaidRevenue}
+                weekCancelledCount={weekCancelledCount}
               />
             )}
 
             {activeSection === 'turnos' && (
               <AppointmentsView
-                weeklySchedule={weeklySchedule}
-                selectedDayId={selectedDay?.isoDate ?? selectedDayId}
+                weeklySchedule={appointmentsSchedule}
+                selectedDayId={filteredSelectedDay?.isoDate ?? selectedDayId}
                 onSelectDay={setSelectedDayId}
-                selectedDay={selectedDay}
+                selectedDay={filteredSelectedDay}
                 selectedAppointmentId={selectedAppointmentId}
                 onSelectAppointment={setSelectedAppointmentId}
+                staff={staff}
+                staffFilter={appointmentStaffFilter}
+                onChangeStaffFilter={setAppointmentStaffFilter}
+                onCancelAppointment={handleCancelAppointment}
+                cancellingAppointmentId={cancellingAppointmentId}
               />
             )}
 
@@ -1383,11 +2361,22 @@ export default function App() {
                 isStaffEditorActive={isStaffEditorActive}
                 onToggleStaffEditor={handleToggleStaffEditor}
                 onCreateStaff={handleCreateStaffMember}
+                onUpdateStaff={handleUpdateStaffMember}
                 isCreatingStaff={isCreatingStaff}
+                isUpdatingStaff={isUpdatingStaff}
                 onDeleteStaff={handleDeleteStaffMember}
                 deletingStaffId={deletingStaffId}
                 staffActionError={staffActionError}
                 onDismissStaffError={handleDismissStaffError}
+                onUpdateStaffSchedule={handleUpdateStaffSchedule}
+                isUpdatingSchedule={isUpdatingSchedule}
+                scheduleActionError={scheduleActionError}
+                onCreateService={handleCreateService}
+                onUpdateService={handleUpdateService}
+                onDeleteService={handleDeleteService}
+                serviceActionError={serviceActionError}
+                isSavingService={isSavingService}
+                deletingServiceId={deletingServiceId}
               />
             )}
 

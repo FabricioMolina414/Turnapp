@@ -1,6 +1,12 @@
 const express = require('express');
 const { authenticate, authorize } = require('../middleware/auth');
-const { listStaff, addStaffMember, removeStaffMember } = require('../data/staff');
+const {
+  listStaff,
+  addStaffMember,
+  updateStaffMember,
+  removeStaffMember,
+  updateStaffSchedule,
+} = require('../data/staff');
 
 const router = express.Router();
 
@@ -11,7 +17,7 @@ router.get('/', (req, res) => {
 });
 
 router.post('/', (req, res) => {
-  const { name, role, availability, specialties, avatar } = req.body ?? {};
+  const { name, role, availability, specialties, avatar, workSchedule, slotDurationMinutes } = req.body ?? {};
 
   try {
     const parsedSpecialties =
@@ -30,6 +36,8 @@ router.post('/', (req, res) => {
       availability,
       specialties: parsedSpecialties,
       avatar,
+      workSchedule,
+      slotDurationMinutes: typeof slotDurationMinutes === 'number' ? slotDurationMinutes : undefined,
     });
 
     return res.status(201).json({ member });
@@ -44,6 +52,42 @@ router.post('/', (req, res) => {
   }
 });
 
+router.patch('/:id', (req, res) => {
+  const { id } = req.params;
+  const { name, role, availability, specialties, avatar, workSchedule, slotDurationMinutes } = req.body ?? {};
+
+  try {
+    const parsedSpecialties =
+      typeof specialties === 'string'
+        ? specialties
+            .split(',')
+            .map((item) => item.trim())
+            .filter((item) => item.length > 0)
+        : Array.isArray(specialties)
+        ? specialties
+        : undefined;
+
+    const updated = updateStaffMember(id, {
+      name,
+      role,
+      availability,
+      specialties: parsedSpecialties,
+      avatar,
+      workSchedule,
+      slotDurationMinutes: typeof slotDurationMinutes === 'number' ? slotDurationMinutes : undefined,
+    });
+    return res.json({ staff: updated });
+  } catch (error) {
+    if (error.message === 'STAFF_NOT_FOUND') {
+      return res.status(404).json({ message: 'Profesional no encontrado.' });
+    }
+    if (error.message === 'STAFF_NAME_EXISTS') {
+      return res.status(409).json({ message: 'Ya existe un profesional con ese nombre.' });
+    }
+    return res.status(500).json({ message: 'No se pudo actualizar el profesional.' });
+  }
+});
+
 router.delete('/:id', (req, res) => {
   const { id } = req.params;
 
@@ -55,6 +99,21 @@ router.delete('/:id', (req, res) => {
       return res.status(404).json({ message: 'Profesional no encontrado.' });
     }
     return res.status(500).json({ message: 'No se pudo eliminar el profesional.' });
+  }
+});
+
+router.patch('/:id/schedule', (req, res) => {
+  const { id } = req.params;
+  const { defaultStart, defaultEnd, overrides, slotDurationMinutes } = req.body ?? {};
+
+  try {
+    const updated = updateStaffSchedule(id, { defaultStart, defaultEnd, overrides, slotDurationMinutes });
+    return res.json({ staff: updated });
+  } catch (error) {
+    if (error.message === 'STAFF_NOT_FOUND') {
+      return res.status(404).json({ message: 'Profesional no encontrado.' });
+    }
+    return res.status(500).json({ message: 'No se pudo actualizar la disponibilidad.' });
   }
 });
 

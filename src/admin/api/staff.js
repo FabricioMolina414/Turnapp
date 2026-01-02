@@ -20,3 +20,19 @@ export async function deleteStaffMember({ token, staffId }) {
     token,
   });
 }
+
+export async function updateStaffSchedule({ token, staffId, schedule }) {
+  return request(`/staff/${staffId}/schedule`, {
+    method: 'PATCH',
+    token,
+    body: schedule,
+  });
+}
+
+export async function updateStaffMember({ token, staffId, staff }) {
+  return request(`/staff/${staffId}`, {
+    method: 'PATCH',
+    token,
+    body: staff,
+  });
+}

@@ -16,3 +16,21 @@ export async function fetchDayAppointments({ token, isoDate }) {
     token,
   });
 }
+
+export async function fetchMonthSummary({ token, referenceDate }) {
+  const params = new URLSearchParams();
+  if (referenceDate) {
+    params.set('referenceDate', referenceDate);
+  }
+  const query = params.toString();
+  return request(`/appointments/month${query ? `?${query}` : ''}`, {
+    token,
+  });
+}
+
+export async function cancelAppointment({ token, appointmentId }) {
+  return request(`/appointments/${appointmentId}`, {
+    method: 'DELETE',
+    token,
+  });
+}

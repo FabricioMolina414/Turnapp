@@ -111,39 +111,6 @@ const METRICS = [
   },
 ];
 
-const BOOKING_SERVICES = [
-  {
-    id: 'corte',
-    name: 'Corte clásico',
-    description: 'Lavado, corte y styling personalizado para tu día a día.',
-    price: '$6.500',
-  },
-  {
-    id: 'corte-barba',
-    name: 'Corte + barba',
-    description: 'Perfeccionamos tu corte y definimos barba con navaja y vapor.',
-    price: '$9.200',
-  },
-  {
-    id: 'barba',
-    name: 'Barba & perfilado',
-    description: 'Diseño y mantenimiento de barba, contornos y humectación.',
-    price: '$4.800',
-  },
-  {
-    id: 'cejas',
-    name: 'Cejas perfectas',
-    description: 'Perfilado, pulido y fijación para cejas simétricas.',
-    price: '$3.100',
-  },
-  {
-    id: 'tratamiento',
-    name: 'Tratamiento capilar',
-    description: 'Shock de nutrición profunda para devolver brillo y suavidad.',
-    price: '$11.000',
-  },
-];
-
 const DEFAULT_STAFF_AVATAR =
   'data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128"><rect width="128" height="128" rx="24" fill="%23f1f5f9"/><circle cx="64" cy="52" r="26" fill="%2394a3b8"/><path d="M24 112c0-22 18-40 40-40s40 18 40 40" fill="%23cbd5f5"/></svg>';
 
@@ -191,6 +158,18 @@ const SALON_LOCATION = {
 const THEME_STORAGE_KEY = 'turnapp-theme';
 
 const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:4000/api';
+
+const formatCurrency = (value) => {
+  const amount = Number(value);
+  if (Number.isNaN(amount)) {
+    return value ? String(value) : '';
+  }
+  return new Intl.NumberFormat('es-AR', {
+    style: 'currency',
+    currency: 'ARS',
+    maximumFractionDigits: 0,
+  }).format(amount);
+};
 
 const getPreferredTheme = () => {
   if (typeof window === 'undefined') {
@@ -857,6 +836,10 @@ function BookingFlow({
   isLoadingBarbers = false,
   barbersError = null,
   onRetryBarbers,
+  bookingServices = [],
+  isLoadingServices = false,
+  servicesError = null,
+  onRetryServices,
 }) {
   const [selectedBarber, setSelectedBarber] = useState(null);
   const [selectedService, setSelectedService] = useState(null);
@@ -876,6 +859,11 @@ function BookingFlow({
     notes: '',
   });
   const [fieldErrors, setFieldErrors] = useState({ phone: '', email: '' });
+  const [availableSlots, setAvailableSlots] = useState([]);
+  const [slotsLoading, setSlotsLoading] = useState(false);
+  const [slotsError, setSlotsError] = useState(null);
+  const [isSubmittingBooking, setIsSubmittingBooking] = useState(false);
+  const [bookingError, setBookingError] = useState(null);
   const [canScrollBarberLeft, setCanScrollBarberLeft] = useState(false);
   const [canScrollBarberRight, setCanScrollBarberRight] = useState(false);
   const [canScrollServiceLeft, setCanScrollServiceLeft] = useState(false);
@@ -961,6 +949,65 @@ function BookingFlow({
       setSelectedSlot(null);
     }
   }, [selectedDay]);
+
+  useEffect(() => {
+    if (selectedSlot && !availableSlots.includes(selectedSlot)) {
+      setSelectedSlot(null);
+    }
+  }, [availableSlots, selectedSlot]);
+
+  useEffect(() => {
+    if (!selectedBarber || !selectedDay || !selectedService) {
+      setAvailableSlots([]);
+      return;
+    }
+
+    const controller = new AbortController();
+    setSlotsLoading(true);
+    setSlotsError(null);
+    setSelectedSlot(null);
+
+    const service = bookingServices.find((item) => item.id === selectedService);
+    const durationMinutes = service?.durationMinutes ?? '';
+    const params = new URLSearchParams({
+      date: selectedDay,
+    });
+    if (durationMinutes) {
+      params.set('durationMinutes', String(durationMinutes));
+    }
+
+    fetch(`${API_BASE_URL}/public/staff/${selectedBarber}/slots?${params.toString()}`, {
+      signal: controller.signal,
+    })
+      .then(async (response) => {
+        if (!response.ok) {
+          const payload = await response.json().catch(() => ({}));
+          throw new Error(payload?.message || 'No pudimos obtener los horarios disponibles.');
+        }
+        return response.json();
+      })
+      .then((data) => {
+        if (!controller.signal.aborted) {
+          const slots = Array.isArray(data?.slots) ? data.slots : [];
+          setAvailableSlots(slots);
+        }
+      })
+      .catch((error) => {
+        if (error.name === 'AbortError') return;
+        console.error('[Public] Error al cargar slots', error);
+        if (!controller.signal.aborted) {
+          setSlotsError(error.message || 'No pudimos obtener los horarios disponibles.');
+          setAvailableSlots([]);
+        }
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) {
+          setSlotsLoading(false);
+        }
+      });
+
+    return () => controller.abort();
+  }, [selectedBarber, selectedDay, selectedService, bookingServices]);
 
   useEffect(() => {
     const container = barberListRef.current;
@@ -1197,6 +1244,7 @@ function BookingFlow({
 
   const handleSelectSlot = (slot) => {
     setSelectedSlot(slot);
+    setBookingError(null);
     if (activeStep < 4) {
       setActiveStep(4);
     }
@@ -1265,32 +1313,91 @@ function BookingFlow({
     }
   }, [barbers, updateBarberScrollState]);
 
-  const handleProceedToPayment = () => {
+  useEffect(() => {
+    if (!bookingServices?.length) {
+      setSelectedService(null);
+      return;
+    }
+    setSelectedService((prev) => {
+      if (!prev) {
+        return prev;
+      }
+      if (bookingServices.some((item) => item.id === prev)) {
+        return prev;
+      }
+      return bookingServices[0].id;
+    });
+
+    if (typeof window !== 'undefined') {
+      window.requestAnimationFrame(updateServiceScrollState);
+    } else {
+      updateServiceScrollState();
+    }
+  }, [bookingServices, updateServiceScrollState]);
+
+  const handleProceedToPayment = async () => {
     if (!selectedBarber || !selectedService || !selectedDay || !selectedSlot) {
+      setBookingError('Completá los pasos anteriores para confirmar el turno.');
       return;
     }
     const barber = barbers.find((info) => info.id === selectedBarber) ?? null;
-    const service = BOOKING_SERVICES.find((info) => info.id === selectedService) ?? null;
+    const service = bookingServices.find((info) => info.id === selectedService) ?? null;
     const dayInfo = weekOptions.find((day) => day.id === selectedDay) ?? null;
 
     if (!service || !dayInfo) {
       return;
     }
 
-    onProceedToPayment({
-      barber,
-      service,
-      schedule: {
-        isoDate: dayInfo.date.toISOString(),
-        weekday: dayInfo.weekday,
-        label: dayInfo.label,
-        slot: selectedSlot,
-      },
-      customer: customerData,
-    });
+    setIsSubmittingBooking(true);
+    setBookingError(null);
+
+    try {
+      const response = await fetch(`${API_BASE_URL}/public/bookings`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+          body: JSON.stringify({
+            staffId: selectedBarber,
+            date: dayInfo.id,
+            slot: selectedSlot,
+            durationMinutes: service.durationMinutes || barber?.slotDurationMinutes || 45,
+            clientName: customerData.name,
+            contact: customerData.phone || customerData.email,
+            serviceId: service.id,
+            service: service.name,
+            serviceCategory: service.category || service.id,
+            notes: customerData.notes,
+          }),
+      });
+
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(payload?.message || 'No pudimos reservar el turno. Intentá de nuevo.');
+      }
+
+      onProceedToPayment({
+        barber,
+        service,
+        schedule: {
+          isoDate: dayInfo.date.toISOString(),
+          weekday: dayInfo.weekday,
+          label: dayInfo.label,
+          slot: selectedSlot,
+        },
+        customer: customerData,
+        booking: payload.booking,
+      });
+    } catch (error) {
+      console.error('[Public] Error al crear turno', error);
+      setBookingError(error.message || 'No pudimos reservar el turno. Intentá de nuevo.');
+    } finally {
+      setIsSubmittingBooking(false);
+    }
   };
 
   const hasBarbers = Array.isArray(barbers) && barbers.length > 0;
+  const hasServices = Array.isArray(bookingServices) && bookingServices.length > 0;
   const showCarousel = !isLoadingBarbers && hasBarbers;
 
   return (
@@ -1405,20 +1512,33 @@ function BookingFlow({
               <span aria-hidden>‹</span>
             </button>
             <div className="service-option-grid service-grid" ref={serviceListRef}>
-              {BOOKING_SERVICES.map((service) => (
-                <button
-                  key={service.id}
-                  type="button"
-                  className={`service-option ${selectedService === service.id ? 'is-selected' : ''}`}
-                  onClick={() => handleSelectService(service.id)}
-                >
-                  <div className="service-option-header">
-                    <h3>{service.name}</h3>
-                    <span>{service.price}</span>
-                  </div>
-                  <p>{service.description}</p>
-                </button>
-              ))}
+              {isLoadingServices ? (
+                <div className="booking-status">Cargando servicios...</div>
+              ) : hasServices ? (
+                bookingServices.map((service) => (
+                  <button
+                    key={service.id}
+                    type="button"
+                    className={`service-option ${selectedService === service.id ? 'is-selected' : ''}`}
+                    onClick={() => handleSelectService(service.id)}
+                  >
+                    <div className="service-option-header">
+                      <h3>{service.name}</h3>
+                      <span>{service.price}</span>
+                    </div>
+                    <p>{service.description}</p>
+                  </button>
+                ))
+              ) : (
+                <div className="booking-status is-empty">
+                  <p>Por ahora no hay servicios disponibles.</p>
+                  {onRetryServices && (
+                    <button type="button" className="secondary-link" onClick={onRetryServices}>
+                      Reintentar
+                    </button>
+                  )}
+                </div>
+              )}
             </div>
             <button
               type="button"
@@ -1430,6 +1550,14 @@ function BookingFlow({
               <span aria-hidden>›</span>
             </button>
           </div>
+          {servicesError && (
+            <div className="booking-alert">
+              <p>{servicesError}</p>
+              <button type="button" className="secondary-link" onClick={onRetryServices}>
+                Reintentar
+              </button>
+            </div>
+          )}
         </section>
       )}
       {activeStep >= 3 && (
@@ -1480,9 +1608,14 @@ function BookingFlow({
               <span aria-hidden>›</span>
             </button>
           </div>
-          {selectedDay && (
-            <div className="slot-grid">
-              {getSlotsForDate(weekOptions.find((day) => day.id === selectedDay)?.date ?? new Date()).map((slot) => (
+        {selectedDay && (
+          <div className="slot-grid">
+            {slotsLoading ? (
+              <div className="booking-status">Cargando horarios...</div>
+            ) : slotsError ? (
+              <div className="booking-status is-empty">{slotsError}</div>
+            ) : availableSlots.length ? (
+              availableSlots.map((slot) => (
                 <button
                   key={slot}
                   type="button"
@@ -1491,9 +1624,12 @@ function BookingFlow({
                 >
                   {slot}
                 </button>
-              ))}
-            </div>
-          )}
+              ))
+            ) : (
+              <div className="booking-status is-empty">Sin horarios disponibles para este día.</div>
+            )}
+          </div>
+        )}
         </section>
       )}
       {activeStep >= 4 && (
@@ -1568,6 +1704,7 @@ function BookingFlow({
               className="button form-submit"
               onClick={handleProceedToPayment}
               disabled={
+                isSubmittingBooking ||
                 !selectedSlot ||
                 !customerData.name ||
                 !customerData.phone ||
@@ -1576,8 +1713,9 @@ function BookingFlow({
                 Boolean(fieldErrors.email)
               }
             >
-              Ir a pagar
+              {isSubmittingBooking ? 'Reservando...' : 'Ir a pagar'}
             </button>
+            {bookingError && <p className="form-error">{bookingError}</p>}
           </form>
         </section>
       )}
@@ -1809,6 +1947,9 @@ function App() {
   const [barbers, setBarbers] = useState([]);
   const [isLoadingBarbers, setIsLoadingBarbers] = useState(false);
   const [barbersError, setBarbersError] = useState(null);
+  const [bookingServices, setBookingServices] = useState([]);
+  const [isLoadingServices, setIsLoadingServices] = useState(false);
+  const [servicesError, setServicesError] = useState(null);
   const loadBarbers = useCallback(
     async (signal) => {
       const controllerSignal = signal;
@@ -1847,6 +1988,45 @@ function App() {
     []
   );
 
+  const loadServices = useCallback(async (signal) => {
+    const controllerSignal = signal;
+    setIsLoadingServices(true);
+    setServicesError(null);
+    try {
+      const response = await fetch(
+        `${API_BASE_URL}/public/services`,
+        controllerSignal ? { signal: controllerSignal } : undefined
+      );
+      if (!response.ok) {
+        throw new Error('No se pudo cargar la lista de servicios.');
+      }
+      const data = await response.json();
+      if (!controllerSignal?.aborted) {
+        const payload = Array.isArray(data?.services) ? data.services : [];
+        const normalized = payload
+          .filter((item) => item?.active !== false)
+          .map((item) => ({
+            ...item,
+            price: formatCurrency(item.price),
+          }));
+        setBookingServices(normalized);
+      }
+    } catch (error) {
+      if (error.name === 'AbortError') {
+        return;
+      }
+      console.error('[Public] Error al cargar servicios', error);
+      if (!controllerSignal?.aborted) {
+        setBookingServices([]);
+        setServicesError('No pudimos cargar los servicios desde el panel. Intentá de nuevo.');
+      }
+    } finally {
+      if (!controllerSignal?.aborted) {
+        setIsLoadingServices(false);
+      }
+    }
+  }, []);
+
   useEffect(() => {
     const controller = new AbortController();
     loadBarbers(controller.signal);
@@ -1855,9 +2035,21 @@ function App() {
     };
   }, [loadBarbers]);
 
+  useEffect(() => {
+    const controller = new AbortController();
+    loadServices(controller.signal);
+    return () => {
+      controller.abort();
+    };
+  }, [loadServices]);
+
   const handleReloadBarbers = useCallback(() => {
     loadBarbers();
   }, [loadBarbers]);
+
+  const handleReloadServices = useCallback(() => {
+    loadServices();
+  }, [loadServices]);
 
   useEffect(() => {
     if (typeof document === 'undefined') {
@@ -1960,6 +2152,10 @@ function App() {
             isLoadingBarbers={isLoadingBarbers}
             barbersError={barbersError}
             onRetryBarbers={handleReloadBarbers}
+            bookingServices={bookingServices}
+            isLoadingServices={isLoadingServices}
+            servicesError={servicesError}
+            onRetryServices={handleReloadServices}
           />
         ) : view === 'checkout' ? (
           <Checkout data={checkoutData} onBack={handleBackToBooking} onReturnHome={handleNavigateHome} />
