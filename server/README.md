@@ -47,6 +47,8 @@ Duplicá `.env.example` a `.env`. Variables disponibles:
 
 La lista de profesionales se guarda en `src/data/staff.json`. Cada vez que agregás o eliminás un staff desde la API o el panel, el archivo se actualiza, por lo que los datos sobreviven a los reinicios del servidor.
 
+Los turnos se guardan en `src/data/bookings.json`. Para compartir la estructura sin datos sensibles, usá `src/data/bookings.example.json` como referencia.
+
 ## Estructura de carpetas
 
 - `src/app.js` — Configuración de Express y rutas.

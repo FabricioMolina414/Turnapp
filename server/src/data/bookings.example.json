@@ -1,0 +1,21 @@
+[
+  {
+    "id": "UUID",
+    "date": "YYYY-MM-DD",
+    "startTime": "HH:MM",
+    "endTime": "HH:MM",
+    "durationMinutes": 45,
+    "clientName": "Cliente",
+    "contact": "",
+    "serviceId": null,
+    "service": "Servicio",
+    "serviceCategory": "",
+    "stylist": "Profesional",
+    "stylistId": "staff-id",
+    "paymentMethod": "pendiente",
+    "price": 0,
+    "status": "confirmado",
+    "notes": "",
+    "createdAt": "YYYY-MM-DDTHH:MM:SSZ"
+  }
+]

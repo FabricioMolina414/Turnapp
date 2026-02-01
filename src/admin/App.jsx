@@ -5,6 +5,7 @@ import LoginView from './components/LoginView.jsx';
 import { fetchWeeklySchedule, fetchMonthSummary, cancelAppointment } from './api/appointments.js';
 import { fetchMonthlyMetrics } from './api/metrics.js';
 import { fetchServices, createService, updateService, deleteService } from './api/services.js';
+import { fetchBranding, saveBranding } from './api/branding.js';
 import {
   fetchStaff,
   createStaffMember,
@@ -12,16 +13,16 @@ import {
   updateStaffSchedule,
   updateStaffMember,
 } from './api/staff.js';
-import { fetchAdmins, createAdmin } from './api/superadmin.js';
+import { fetchAdmins, createAdmin, updateAdminRole } from './api/superadmin.js';
 
 const DEFAULT_STAFF_AVATAR =
   'data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128"><rect width="128" height="128" rx="24" fill="%23f1f5f9"/><circle cx="64" cy="52" r="26" fill="%2394a3b8"/><path d="M24 112c0-22 18-40 40-40s40 18 40 40" fill="%23cbd5f5"/></svg>';
 
 const NAV_ITEMS = [
-  { id: 'dashboard', label: 'Mi comercio', roles: ['admin', 'superadmin'] },
-  { id: 'turnos', label: 'Turnos', roles: ['admin', 'superadmin'] },
+  { id: 'dashboard', label: 'Panel general', roles: ['admin', 'staff', 'superadmin'] },
+  { id: 'turnos', label: 'Turnos', roles: ['admin', 'staff', 'superadmin'] },
   { id: 'services', label: 'Mis servicios', roles: ['admin', 'superadmin'] },
-  { id: 'branding', label: 'Personalización', roles: ['admin', 'superadmin'] },
+  { id: 'branding', label: 'Mi comercio', roles: ['admin', 'superadmin'] },
   { id: 'admins', label: 'Administradores', roles: ['superadmin'] },
 ];
 
@@ -35,6 +36,219 @@ const weekdayFormatter = new Intl.DateTimeFormat('es-AR', { weekday: 'long' });
 const shortDayFormatter = new Intl.DateTimeFormat('es-AR', { day: '2-digit', month: 'short' });
 const longDateFormatter = new Intl.DateTimeFormat('es-AR', { day: 'numeric', month: 'long' });
 const weekRangeFormatter = new Intl.DateTimeFormat('es-AR', { day: 'numeric', month: 'short' });
+
+const DEFAULT_BRANDING = {
+  primaryColor: '#f97316',
+  accentColor: '#ea580c',
+  themePreference: 'light',
+  heroImageUrl: '',
+  navbarLogoUrl: '',
+  footerLogoUrl: '',
+  locationAddress: '',
+  highlightMessage: 'Agendá tu turno en línea y recibí la confirmación al instante.',
+};
+
+const parseHexColor = (value) => {
+  if (!value || typeof value !== 'string') return null;
+  const normalized = value.trim();
+  if (!/^#[0-9a-fA-F]{6}$/.test(normalized)) return null;
+  const numeric = Number.parseInt(normalized.slice(1), 16);
+  return {
+    r: (numeric >> 16) & 255,
+    g: (numeric >> 8) & 255,
+    b: numeric & 255,
+  };
+};
+
+const toRgbString = (rgb) => `${rgb.r}, ${rgb.g}, ${rgb.b}`;
+
+const darkenHex = (value, amount = 0.18) => {
+  const rgb = parseHexColor(value);
+  if (!rgb) return value;
+  const scale = (channel) => Math.max(0, Math.min(255, Math.round(channel * (1 - amount))));
+  return `#${[scale(rgb.r), scale(rgb.g), scale(rgb.b)]
+    .map((channel) => channel.toString(16).padStart(2, '0'))
+    .join('')}`;
+};
+
+const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
+
+const rgbToHex = (rgb) =>
+  `#${[rgb.r, rgb.g, rgb.b].map((channel) => channel.toString(16).padStart(2, '0')).join('')}`;
+
+const toLinearChannel = (channel) => {
+  const normalized = channel / 255;
+  return normalized <= 0.03928 ? normalized / 12.92 : Math.pow((normalized + 0.055) / 1.055, 2.4);
+};
+
+const relativeLuminance = (rgb) =>
+  0.2126 * toLinearChannel(rgb.r) +
+  0.7152 * toLinearChannel(rgb.g) +
+  0.0722 * toLinearChannel(rgb.b);
+
+const contrastRatio = (a, b) => {
+  const lumA = relativeLuminance(a);
+  const lumB = relativeLuminance(b);
+  const [lighter, darker] = lumA >= lumB ? [lumA, lumB] : [lumB, lumA];
+  return (lighter + 0.05) / (darker + 0.05);
+};
+
+const rgbToHsl = (rgb) => {
+  const r = rgb.r / 255;
+  const g = rgb.g / 255;
+  const b = rgb.b / 255;
+  const max = Math.max(r, g, b);
+  const min = Math.min(r, g, b);
+  const delta = max - min;
+  let h = 0;
+  let s = 0;
+  const l = (max + min) / 2;
+
+  if (delta !== 0) {
+    s = l > 0.5 ? delta / (2 - max - min) : delta / (max + min);
+    switch (max) {
+      case r:
+        h = (g - b) / delta + (g < b ? 6 : 0);
+        break;
+      case g:
+        h = (b - r) / delta + 2;
+        break;
+      default:
+        h = (r - g) / delta + 4;
+    }
+    h *= 60;
+  }
+
+  return { h, s, l };
+};
+
+const hslToRgb = (h, s, l) => {
+  const c = (1 - Math.abs(2 * l - 1)) * s;
+  const x = c * (1 - Math.abs(((h / 60) % 2) - 1));
+  const m = l - c / 2;
+  let r = 0;
+  let g = 0;
+  let b = 0;
+
+  if (h >= 0 && h < 60) {
+    r = c;
+    g = x;
+  } else if (h >= 60 && h < 120) {
+    r = x;
+    g = c;
+  } else if (h >= 120 && h < 180) {
+    g = c;
+    b = x;
+  } else if (h >= 180 && h < 240) {
+    g = x;
+    b = c;
+  } else if (h >= 240 && h < 300) {
+    r = x;
+    b = c;
+  } else {
+    r = c;
+    b = x;
+  }
+
+  return {
+    r: Math.round((r + m) * 255),
+    g: Math.round((g + m) * 255),
+    b: Math.round((b + m) * 255),
+  };
+};
+
+const rgbaString = (rgb, alpha) => `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, ${alpha})`;
+
+const DARK_THEME_VARIABLES = [
+  '--surface-100',
+  '--surface-200',
+  '--surface-contrast',
+  '--surface-muted',
+  '--surface-subtle',
+  '--navbar-bg',
+  '--footer-bg',
+  '--input-bg',
+];
+
+const buildContrastOptimizedDarkPalette = (primaryColor) => {
+  const primaryRgb = parseHexColor(primaryColor);
+  if (!primaryRgb) return null;
+
+  const primaryHsl = rgbToHsl(primaryRgb);
+  const hue = primaryHsl.h;
+  const saturation = clamp(primaryHsl.s * 0.35, 0.08, 0.28);
+  let bestCandidate = null;
+
+  for (let lightness = 0.04; lightness <= 0.18; lightness += 0.004) {
+    const candidateRgb = hslToRgb(hue, saturation, lightness);
+    const ratio = contrastRatio(primaryRgb, candidateRgb);
+    if (
+      !bestCandidate ||
+      ratio > bestCandidate.ratio ||
+      (ratio === bestCandidate.ratio && lightness < bestCandidate.lightness)
+    ) {
+      bestCandidate = {
+        rgb: candidateRgb,
+        lightness,
+        ratio,
+      };
+    }
+  }
+
+  if (!bestCandidate) return null;
+  const baseHsl = rgbToHsl(bestCandidate.rgb);
+  const surface100 = bestCandidate.rgb;
+  const surface200 = hslToRgb(baseHsl.h, baseHsl.s, clamp(baseHsl.l + 0.06, 0, 0.22));
+  const surfaceContrast = hslToRgb(baseHsl.h, baseHsl.s, clamp(baseHsl.l + 0.03, 0, 0.22));
+  const surfaceSubtle = hslToRgb(baseHsl.h, baseHsl.s, clamp(baseHsl.l + 0.12, 0, 0.3));
+
+  return {
+    '--surface-100': rgbToHex(surface100),
+    '--surface-200': rgbToHex(surface200),
+    '--surface-contrast': rgbToHex(surfaceContrast),
+    '--surface-muted': rgbaString(surface200, 0.85),
+    '--surface-subtle': rgbaString(surfaceSubtle, 0.55),
+    '--navbar-bg': rgbaString(surface100, 0.85),
+    '--footer-bg': rgbToHex(surfaceContrast),
+    '--input-bg': rgbaString(surfaceContrast, 0.65),
+  };
+};
+
+const applyDarkThemeOverrides = (primaryColor, theme) => {
+  if (typeof document === 'undefined') return;
+  const root = document.documentElement;
+  if (theme !== 'dark') {
+    DARK_THEME_VARIABLES.forEach((name) => root.style.removeProperty(name));
+    return;
+  }
+  const palette = buildContrastOptimizedDarkPalette(primaryColor);
+  if (!palette) return;
+  Object.entries(palette).forEach(([name, value]) => root.style.setProperty(name, value));
+};
+
+const applyBrandingVariables = (branding) => {
+  const primaryColor = branding?.primaryColor || DEFAULT_BRANDING.primaryColor;
+  const accentColor = branding?.accentColor || DEFAULT_BRANDING.accentColor;
+  const primaryRgb = parseHexColor(primaryColor) || parseHexColor(DEFAULT_BRANDING.primaryColor);
+  const accentRgb = parseHexColor(accentColor) || parseHexColor(DEFAULT_BRANDING.accentColor);
+
+  if (!primaryRgb || !accentRgb) return;
+
+  const normalizedAccent = accentColor.trim().toLowerCase();
+  const isAccentWhite = normalizedAccent === '#ffffff';
+  const root = document.documentElement;
+  root.style.setProperty('--brand-500', primaryColor);
+  root.style.setProperty('--brand-600', accentColor);
+  root.style.setProperty('--brand-700', darkenHex(accentColor, 0.2));
+  root.style.setProperty('--brand-500-rgb', toRgbString(primaryRgb));
+  root.style.setProperty('--brand-600-rgb', toRgbString(accentRgb));
+  root.style.setProperty('--focus-outline', `2px solid rgba(${toRgbString(primaryRgb)}, 0.4)`);
+  root.style.setProperty('--surface-highlight', `rgba(${toRgbString(primaryRgb)}, 0.12)`);
+  root.style.setProperty('--surface-highlight-strong', `rgba(${toRgbString(primaryRgb)}, 0.28)`);
+  root.style.setProperty('--shadow-xl', `0 30px 60px rgba(${toRgbString(accentRgb)}, 0.25)`);
+  root.style.setProperty('--shadow-hero', `0 25px 50px rgba(${toRgbString(accentRgb)}, 0.3)`);
+  root.style.setProperty('--cta-hover-text', isAccentWhite ? 'var(--surface-100)' : '#ffffff');
+};
 
 const EMPTY_STAFF_FORM = {
   name: '',
@@ -86,9 +300,90 @@ function formatAvailabilityLabel(days, schedule) {
   return `${dayText} · ${start} a ${end}`;
 }
 
+function readFileAsDataUrl(file) {
+  return new Promise((resolve, reject) => {
+    if (!file) {
+      resolve('');
+      return;
+    }
+
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = () => reject(new Error('FILE_READ_ERROR'));
+    reader.readAsDataURL(file);
+  });
+}
+
 function formatAvailabilityDays(days) {
   const dayLabels = WEEK_DAYS.filter((day) => days.includes(day.value)).map((day) => day.full);
   return dayLabels.join(', ');
+}
+
+function SunIcon(props) {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.8"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      {...props}
+    >
+      <circle cx="12" cy="12" r="4" />
+      <path d="M12 2v2" />
+      <path d="M12 20v2" />
+      <path d="m4.93 4.93 1.41 1.41" />
+      <path d="m17.66 17.66 1.41 1.41" />
+      <path d="M2 12h2" />
+      <path d="M20 12h2" />
+      <path d="m6.34 17.66-1.41 1.41" />
+      <path d="m19.07 4.93-1.41 1.41" />
+    </svg>
+  );
+}
+
+function MoonIcon(props) {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.8"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      {...props}
+    >
+      <path d="M21 12.79A9 9 0 0 1 11.21 3 7 7 0 1 0 21 12.79Z" />
+    </svg>
+  );
+}
+
+function ThemeToggle({ theme, onToggle, disabled = false }) {
+  const isDark = theme === 'dark';
+  return (
+    <button
+      type="button"
+      className={`theme-toggle ${isDark ? 'is-dark' : ''}`}
+      onClick={disabled ? undefined : onToggle}
+      role="switch"
+      aria-checked={isDark}
+      aria-disabled={disabled}
+      aria-busy={disabled}
+      disabled={disabled}
+      aria-label={isDark ? 'Cambiar a modo claro' : 'Cambiar a modo oscuro'}
+    >
+      <span className="theme-toggle-icon" aria-hidden>
+        <SunIcon />
+      </span>
+      <span className="theme-toggle-track" aria-hidden>
+        <span className="theme-toggle-thumb" />
+      </span>
+      <span className="theme-toggle-icon" aria-hidden>
+        <MoonIcon />
+      </span>
+    </button>
+  );
 }
 
 const EMPTY_SERVICE_FORM = {
@@ -147,11 +442,7 @@ function buildWeeklySchedule(scheduleMap, referenceDate = new Date()) {
   });
 }
 
-function Sidebar({ navItems, activeItem, onSelect }) {
-  if (!navItems.length) {
-    return null;
-  }
-
+function Sidebar({ navItems, activeItem, onSelect, user, onLogout }) {
   return (
     <aside className="admin-sidebar">
       <div className="sidebar-header">
@@ -162,7 +453,7 @@ function Sidebar({ navItems, activeItem, onSelect }) {
         </div>
       </div>
 
-      <nav className="admin-nav">
+      <nav className="admin-nav sidebar-nav">
         {navItems.map((item) => {
           const isActive = activeItem === item.id;
           return (
@@ -178,14 +469,16 @@ function Sidebar({ navItems, activeItem, onSelect }) {
         })}
       </nav>
 
-      <div className="sidebar-footer">
-        <span className="sidebar-title">Próximas acciones</span>
-        <ul>
-          <li>Configurar recordatorios automáticos</li>
-          <li>Invitar a tu equipo a la app</li>
-          <li>Activar integraciones de pago</li>
-        </ul>
+      <div className="user-chip sidebar-user">
+        <div>
+          <strong>{user?.name || user?.email}</strong>
+          <span>{capitalize(user?.role)}</span>
+        </div>
+        <button type="button" className="secondary-button" onClick={onLogout}>
+          Cerrar sesión
+        </button>
       </div>
+
     </aside>
   );
 }
@@ -267,15 +560,6 @@ function DashboardView({
         />
       </section>
 
-      <section className="card">
-        <header className="card-header">
-          <div>
-            <h2>Últimos 6 meses</h2>
-            <p>Seguimiento de turnos confirmados, cancelaciones y facturación.</p>
-          </div>
-        </header>
-        <MonthlyOverview data={monthlyMetrics} />
-      </section>
     </div>
   );
 }
@@ -1550,72 +1834,226 @@ function ServicesView({
   );
 }
 
-function BrandingView() {
+function BrandingView({ branding, isLoading, isSaving, error, onSave }) {
+  const [formState, setFormState] = useState({ ...DEFAULT_BRANDING, ...(branding ?? {}) });
+  const [formError, setFormError] = useState(null);
+  const [formSuccess, setFormSuccess] = useState(null);
+  const locationAddress = formState.locationAddress?.trim();
+  const mapEmbedUrl = locationAddress
+    ? `https://maps.google.com/maps?q=${encodeURIComponent(locationAddress)}&z=16&output=embed`
+    : null;
+
+  useEffect(() => {
+    setFormState({ ...DEFAULT_BRANDING, ...(branding ?? {}) });
+    setFormError(null);
+    setFormSuccess(null);
+  }, [branding]);
+
+  const handleColorChange = (event) => {
+    const { name, value } = event.target;
+    setFormState((prev) => ({ ...prev, [name]: value }));
+  };
+
+  const handleTextChange = (event) => {
+    const { name, value } = event.target;
+    setFormState((prev) => ({ ...prev, [name]: value }));
+  };
+
+  const handleImageChange = (field) => async (event) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    if (file.size > 1200000) {
+      setFormError('La imagen es muy pesada. Usá un archivo menor a 1.2MB.');
+      return;
+    }
+
+    try {
+      const dataUrl = await readFileAsDataUrl(file);
+      setFormState((prev) => ({ ...prev, [field]: dataUrl }));
+      setFormError(null);
+    } catch (readError) {
+      setFormError('No pudimos cargar la imagen seleccionada.');
+    }
+  };
+
+  const handleReset = () => {
+    setFormState({ ...DEFAULT_BRANDING, ...(branding ?? {}) });
+    setFormError(null);
+    setFormSuccess(null);
+  };
+
+  const handleSubmit = async (event) => {
+    event.preventDefault();
+    setFormError(null);
+    setFormSuccess(null);
+
+    try {
+      await onSave(formState);
+      setFormSuccess('Personalización guardada.');
+    } catch (submitError) {
+      setFormError(submitError.message || 'No se pudo guardar la personalización.');
+    }
+  };
+
+  const logoNavbarSrc = formState.navbarLogoUrl || brandLogo;
+  const logoFooterSrc = formState.footerLogoUrl || brandLogo;
+
   return (
     <div className="branding-view">
+      <section className="card" style={{ marginBottom: '1.5rem' }}>
+        <header className="card-header">
+          <div>
+            <h2>Ubicación de mi comercio</h2>
+            <p>Definí la dirección que se verá en el sitio público.</p>
+          </div>
+        </header>
+
+        {isLoading ? (
+          <p className="empty-state">Cargando ubicación...</p>
+        ) : (
+          <div className="branding-form">
+            <div className="form-field">
+              <label htmlFor="location-address">Dirección</label>
+              <input
+                type="text"
+                id="location-address"
+                name="locationAddress"
+                value={formState.locationAddress}
+                onChange={handleTextChange}
+                placeholder="Ej. El Chaco 106, Córdoba Capital"
+              />
+            </div>
+            {mapEmbedUrl ? (
+              <div style={{ marginTop: '1rem', borderRadius: '16px', overflow: 'hidden' }}>
+                <iframe
+                  title="Mapa de ubicación"
+                  src={mapEmbedUrl}
+                  loading="lazy"
+                  allowFullScreen
+                  referrerPolicy="no-referrer-when-downgrade"
+                  style={{ width: '100%', minHeight: '220px', border: '0' }}
+                />
+              </div>
+            ) : (
+              <p className="form-helper">Ingresá una dirección para ver la vista previa del mapa.</p>
+            )}
+          </div>
+        )}
+      </section>
+
       <section className="card">
         <header className="card-header">
           <div>
             <h2>Identidad visual</h2>
             <p>Actualizá colores, logos e imágenes visibles en tu sitio público.</p>
           </div>
-          <button type="button" className="secondary-button">
+          <button
+            type="button"
+            className="secondary-button"
+            onClick={() => window.open('/', '_blank', 'noopener')}
+          >
             Vista previa
           </button>
         </header>
 
-        <form className="branding-form" onSubmit={(event) => event.preventDefault()}>
-          <div className="form-field">
-            <label htmlFor="primary-color">Color principal</label>
-            <input type="color" id="primary-color" name="primary-color" defaultValue="#f97316" />
-          </div>
+        {isLoading ? (
+          <p className="empty-state">Cargando personalización...</p>
+        ) : (
+          <form className="branding-form" onSubmit={handleSubmit}>
+            {(error || formError) && <p className="form-helper">{error || formError}</p>}
+            {formSuccess && <p className="form-helper">{formSuccess}</p>}
 
-          <div className="form-field">
-            <label htmlFor="secondary-color">Color de acento</label>
-            <input type="color" id="secondary-color" name="secondary-color" defaultValue="#ea580c" />
-          </div>
-
-          <div className="form-field">
-            <label htmlFor="hero-image">Imágenes del hero</label>
-            <input type="file" id="hero-image" name="hero-image" accept="image/png,image/jpeg" />
-            <p className="form-helper">Formatos JPG o PNG · Recomendado 1440 × 900 px.</p>
-          </div>
-
-          <div className="form-field">
-            <label htmlFor="navbar-logo">Logo navbar</label>
-            <div className="logo-preview">
-              <img src={brandLogo} alt="Logo actual" />
-              <input type="file" id="navbar-logo" name="navbar-logo" accept="image/png,image/svg+xml" />
+            <div className="form-field">
+              <label htmlFor="primary-color">Color principal</label>
+              <input
+                type="color"
+                id="primary-color"
+                name="primaryColor"
+                value={formState.primaryColor}
+                onChange={handleColorChange}
+              />
             </div>
-          </div>
 
-          <div className="form-field">
-            <label htmlFor="footer-logo">Logo footer</label>
-            <div className="logo-preview">
-              <img src={brandLogo} alt="Logo actual" />
-              <input type="file" id="footer-logo" name="footer-logo" accept="image/png,image/svg+xml" />
+            <div className="form-field">
+              <label htmlFor="secondary-color">Color de acento</label>
+              <input
+                type="color"
+                id="secondary-color"
+                name="accentColor"
+                value={formState.accentColor}
+                onChange={handleColorChange}
+              />
             </div>
-          </div>
 
-          <div className="form-field">
-            <label htmlFor="custom-copy">Mensaje destacado</label>
-            <textarea
-              id="custom-copy"
-              name="custom-copy"
-              rows={3}
-              defaultValue="Agendá tu turno en línea y recibí la confirmación al instante."
-            />
-          </div>
+            <div className="form-field">
+              <label htmlFor="hero-image">Imagen del hero</label>
+              <div className="logo-preview">
+                {formState.heroImageUrl ? (
+                  <img src={formState.heroImageUrl} alt="Hero actual" />
+                ) : (
+                  <img src={logoNavbarSrc} alt="Hero actual" />
+                )}
+                <input
+                  type="file"
+                  id="hero-image"
+                  name="hero-image"
+                  accept="image/png,image/jpeg"
+                  onChange={handleImageChange('heroImageUrl')}
+                />
+              </div>
+              <p className="form-helper">Formatos JPG o PNG · Recomendado 1440 × 900 px.</p>
+            </div>
 
-          <div className="form-actions">
-            <button type="button" className="secondary-button">
-              Deshacer cambios
-            </button>
-            <button type="submit" className="primary-button">
-              Guardar personalización
-            </button>
-          </div>
-        </form>
+            <div className="form-field">
+              <label htmlFor="navbar-logo">Logo navbar</label>
+              <div className="logo-preview">
+                <img src={logoNavbarSrc} alt="Logo actual" />
+                <input
+                  type="file"
+                  id="navbar-logo"
+                  name="navbar-logo"
+                  accept="image/png,image/svg+xml"
+                  onChange={handleImageChange('navbarLogoUrl')}
+                />
+              </div>
+            </div>
+
+            <div className="form-field">
+              <label htmlFor="footer-logo">Logo footer</label>
+              <div className="logo-preview">
+                <img src={logoFooterSrc} alt="Logo actual" />
+                <input
+                  type="file"
+                  id="footer-logo"
+                  name="footer-logo"
+                  accept="image/png,image/svg+xml"
+                  onChange={handleImageChange('footerLogoUrl')}
+                />
+              </div>
+            </div>
+
+            <div className="form-field">
+              <label htmlFor="custom-copy">Mensaje destacado</label>
+              <textarea
+                id="custom-copy"
+                name="highlightMessage"
+                rows={3}
+                value={formState.highlightMessage}
+                onChange={handleTextChange}
+              />
+            </div>
+
+            <div className="form-actions">
+              <button type="button" className="secondary-button" onClick={handleReset} disabled={isSaving}>
+                Deshacer cambios
+              </button>
+              <button type="submit" className="primary-button" disabled={isSaving}>
+                {isSaving ? 'Guardando...' : 'Guardar personalización'}
+              </button>
+            </div>
+          </form>
+        )}
       </section>
     </div>
   );
@@ -1627,16 +2065,25 @@ function SuperadminView({
   error,
   onReload,
   onCreateAdmin,
+  onUpdateAdminRole,
   isSubmitting,
+  updatingAdminId,
+  roleUpdateError,
 }) {
   const [formState, setFormState] = useState({
     name: '',
     email: '',
     username: '',
     password: '',
+    role: 'admin',
   });
   const [formError, setFormError] = useState(null);
   const [formSuccess, setFormSuccess] = useState(null);
+  const roleLabels = {
+    admin: 'Admin',
+    staff: 'Staff',
+    superadmin: 'Superadmin',
+  };
 
   const handleChange = (event) => {
     const { name, value } = event.target;
@@ -1653,6 +2100,7 @@ function SuperadminView({
       email: formState.email.trim(),
       username: formState.username.trim(),
       password: formState.password.trim(),
+      role: formState.role,
     };
 
     if (!trimmed.name || !trimmed.email || !trimmed.password) {
@@ -1665,15 +2113,16 @@ function SuperadminView({
         ...trimmed,
         username: trimmed.username || undefined,
       });
-      setFormSuccess('Administrador creado correctamente.');
+      setFormSuccess('Usuario creado correctamente.');
       setFormState({
         name: '',
         email: '',
         username: '',
         password: '',
+        role: 'admin',
       });
     } catch (submitError) {
-      setFormError(submitError.message || 'No se pudo crear el administrador.');
+      setFormError(submitError.message || 'No se pudo crear el usuario.');
     }
   };
 
@@ -1682,7 +2131,7 @@ function SuperadminView({
       <section className="card">
         <header className="card-header">
           <div>
-            <h2>Crear nuevo administrador</h2>
+            <h2>Crear nuevo usuario</h2>
             <p>Invitá a tu equipo otorgándoles acceso al panel admin.</p>
           </div>
         </header>
@@ -1727,6 +2176,20 @@ function SuperadminView({
               </p>
             </div>
             <div className="form-field">
+              <label htmlFor="admin-role">Rol</label>
+              <select
+                id="admin-role"
+                name="role"
+                value={formState.role}
+                onChange={handleChange}
+                disabled={isSubmitting}
+              >
+                <option value="admin">Admin</option>
+                <option value="staff">Staff</option>
+              </select>
+              <p className="form-helper">Definí el acceso con el rol correcto.</p>
+            </div>
+            <div className="form-field">
               <label htmlFor="admin-password">Contraseña temporal</label>
               <input
                 id="admin-password"
@@ -1737,7 +2200,7 @@ function SuperadminView({
                 onChange={handleChange}
                 disabled={isSubmitting}
               />
-              <p className="form-helper">El admin podrá cambiarla luego.</p>
+              <p className="form-helper">El usuario podrá cambiarla luego.</p>
             </div>
           </div>
 
@@ -1749,7 +2212,7 @@ function SuperadminView({
 
           <div className="form-actions">
             <button type="submit" className="primary-button" disabled={isSubmitting}>
-              {isSubmitting ? 'Creando...' : 'Crear administrador'}
+              {isSubmitting ? 'Creando...' : 'Crear usuario'}
             </button>
           </div>
         </form>
@@ -1758,7 +2221,7 @@ function SuperadminView({
       <section className="card">
         <header className="card-header">
           <div>
-            <h2>Administradores activos</h2>
+            <h2>Usuarios activos</h2>
             <p>Controlá quién tiene acceso al panel y cuándo fue su alta.</p>
           </div>
           <button type="button" className="secondary-button" onClick={onReload} disabled={isLoading}>
@@ -1774,11 +2237,16 @@ function SuperadminView({
             </button>
           </div>
         )}
+        {roleUpdateError && (
+          <div className="alert-error">
+            <p>{roleUpdateError}</p>
+          </div>
+        )}
 
         {isLoading && !admins.length ? (
           <div className="loading-state">
             <div className="spinner" />
-            <p>Cargando administradores...</p>
+            <p>Cargando usuarios...</p>
           </div>
         ) : (
           <div className="admins-table">
@@ -1787,6 +2255,7 @@ function SuperadminView({
               <span>Email</span>
               <span>Usuario</span>
               <span>Alta</span>
+              <span>Acciones</span>
             </div>
             {admins.length ? (
               admins.map((admin) => (
@@ -1794,7 +2263,7 @@ function SuperadminView({
                   <div className="admins-main">
                     <strong>{admin.name}</strong>
                     <span className="admins-role">
-                      {admin.role === 'superadmin' ? 'Superadmin' : 'Admin'}
+                      {roleLabels[admin.role] ?? 'Admin'}
                     </span>
                   </div>
                   <span>{admin.email}</span>
@@ -1808,10 +2277,29 @@ function SuperadminView({
                         })
                       : '—'}
                   </span>
+                  <div>
+                    <button
+                      type="button"
+                      className="secondary-button"
+                      onClick={() =>
+                        onUpdateAdminRole({
+                          userId: admin.id,
+                          role: admin.role === 'staff' ? 'admin' : 'staff',
+                        })
+                      }
+                      disabled={updatingAdminId === admin.id}
+                    >
+                      {updatingAdminId === admin.id
+                        ? 'Actualizando...'
+                        : admin.role === 'staff'
+                        ? 'Promover a admin'
+                        : 'Pasar a staff'}
+                    </button>
+                  </div>
                 </div>
               ))
             ) : (
-              <p className="empty-state">Todavía no invitaste a ningún administrador.</p>
+              <p className="empty-state">Todavía no invitaste a ningún usuario.</p>
             )}
           </div>
         )}
@@ -1847,6 +2335,10 @@ function DataState({ isLoading, error, onRetry }) {
 export default function App() {
   const { status, user, token, logout } = useAuth();
   const userRole = user?.role ?? 'guest';
+  const canManageServices = userRole === 'admin' || userRole === 'superadmin';
+  const canManageBranding = userRole === 'admin' || userRole === 'superadmin';
+  const canCancelAppointments = userRole === 'admin' || userRole === 'superadmin';
+  const canUpdateTheme = userRole === 'admin' || userRole === 'superadmin';
   const navItems = useMemo(
     () => NAV_ITEMS.filter((item) => !item.roles || item.roles.includes(userRole)),
     [userRole]
@@ -1862,10 +2354,18 @@ export default function App() {
   const [monthSummary, setMonthSummary] = useState({ confirmedRevenue: 0 });
   const [isLoadingData, setIsLoadingData] = useState(false);
   const [dataError, setDataError] = useState(null);
+  const [branding, setBranding] = useState(null);
+  const [brandingLoading, setBrandingLoading] = useState(false);
+  const [brandingError, setBrandingError] = useState(null);
+  const [brandingSaving, setBrandingSaving] = useState(false);
+  const [theme, setTheme] = useState(DEFAULT_BRANDING.themePreference);
+  const [isThemeSaving, setIsThemeSaving] = useState(false);
   const [admins, setAdmins] = useState([]);
   const [adminsLoading, setAdminsLoading] = useState(false);
   const [adminsError, setAdminsError] = useState(null);
   const [isCreatingAdmin, setIsCreatingAdmin] = useState(false);
+  const [updatingAdminId, setUpdatingAdminId] = useState(null);
+  const [roleUpdateError, setRoleUpdateError] = useState(null);
   const [isStaffEditorActive, setIsStaffEditorActive] = useState(false);
   const [isCreatingStaff, setIsCreatingStaff] = useState(false);
   const [isUpdatingStaff, setIsUpdatingStaff] = useState(false);
@@ -1877,6 +2377,23 @@ export default function App() {
   const [serviceActionError, setServiceActionError] = useState(null);
   const [isSavingService, setIsSavingService] = useState(false);
   const [deletingServiceId, setDeletingServiceId] = useState(null);
+
+  useEffect(() => {
+    applyBrandingVariables(branding || DEFAULT_BRANDING);
+  }, [branding]);
+
+  useEffect(() => {
+    const preferred = branding?.themePreference || DEFAULT_BRANDING.themePreference;
+    setTheme((current) => (current === preferred ? current : preferred));
+  }, [branding]);
+
+  useEffect(() => {
+    if (typeof document === 'undefined') return;
+    document.documentElement.dataset.theme = theme;
+    document.documentElement.classList.toggle('is-dark-mode', theme === 'dark');
+    const primaryColor = branding?.primaryColor || DEFAULT_BRANDING.primaryColor;
+    applyDarkThemeOverrides(primaryColor, theme);
+  }, [theme, branding]);
 
   const selectedDay = useMemo(
     () => weeklySchedule.find((day) => day.isoDate === selectedDayId) ?? weeklySchedule[0] ?? null,
@@ -1956,13 +2473,18 @@ export default function App() {
     setDataError(null);
 
     try {
-      const [scheduleResponse, metricsResponse, servicesResponse, staffResponse, monthSummaryResponse] =
-        await Promise.all([
+      const [
+        scheduleResponse,
+        metricsResponse,
+        staffResponse,
+        monthSummaryResponse,
+        servicesResponse,
+      ] = await Promise.all([
         fetchWeeklySchedule({ token }),
         fetchMonthlyMetrics({ token }),
-        fetchServices({ token }),
         fetchStaff({ token }),
         fetchMonthSummary({ token }),
+        canManageServices ? fetchServices({ token }) : Promise.resolve({ services: [] }),
       ]);
 
       const schedule = buildWeeklySchedule(scheduleResponse?.schedule);
@@ -1978,7 +2500,7 @@ export default function App() {
     } finally {
       setIsLoadingData(false);
     }
-  }, [token]);
+  }, [token, canManageServices]);
 
   useEffect(() => {
     if (token) {
@@ -1986,18 +2508,87 @@ export default function App() {
     }
   }, [token, loadData]);
 
+  const loadBranding = useCallback(async () => {
+    if (!token) return;
+    setBrandingLoading(true);
+    setBrandingError(null);
+
+    try {
+      const response = await fetchBranding({ token });
+      setBranding(response?.branding ?? null);
+    } catch (error) {
+      console.error('[Admin] Error al cargar branding', error);
+      setBrandingError(error.message || 'No se pudo cargar la personalización');
+    } finally {
+      setBrandingLoading(false);
+    }
+  }, [token]);
+
+  useEffect(() => {
+    if (token) {
+      loadBranding();
+    }
+  }, [token, loadBranding]);
+
+  const handleSaveBranding = useCallback(
+    async (payload) => {
+      if (!token) {
+        throw new Error('No hay sesión activa');
+      }
+
+      setBrandingSaving(true);
+      setBrandingError(null);
+
+      try {
+        const response = await saveBranding({ token, branding: payload });
+        const updated = response?.branding ?? payload;
+        setBranding(updated);
+        return updated;
+      } catch (error) {
+        const message = error.payload?.message || error.message || 'No se pudo guardar la personalización.';
+        setBrandingError(message);
+        throw new Error(message);
+      } finally {
+        setBrandingSaving(false);
+      }
+    },
+    [token]
+  );
+
+  const handleToggleTheme = useCallback(async () => {
+    if (!token || !canUpdateTheme) return;
+    const nextTheme = theme === 'light' ? 'dark' : 'light';
+    const fallbackTheme = theme;
+    setTheme(nextTheme);
+    setIsThemeSaving(true);
+    try {
+      const response = await saveBranding({ token, branding: { themePreference: nextTheme } });
+      const updated = response?.branding ?? {
+        ...(branding ?? DEFAULT_BRANDING),
+        themePreference: nextTheme,
+      };
+      setBranding(updated);
+    } catch (error) {
+      console.error('[Admin] Error al guardar tema', error);
+      setTheme(fallbackTheme);
+    } finally {
+      setIsThemeSaving(false);
+    }
+  }, [token, theme, branding, canUpdateTheme]);
+
   const isSuperadmin = userRole === 'superadmin';
 
   const loadAdmins = useCallback(async () => {
     if (!token || !isSuperadmin) return;
     setAdminsLoading(true);
     setAdminsError(null);
+    setRoleUpdateError(null);
     try {
       const response = await fetchAdmins({ token });
       setAdmins(response?.admins ?? []);
     } catch (error) {
       console.error('[Admin] Error al cargar admins', error);
-      setAdminsError(error.message || 'No se pudo cargar el listado de admins');
+      setAdminsError(error.message || 'No se pudo cargar el listado de usuarios');
     } finally {
       setAdminsLoading(false);
     }
@@ -2012,21 +2603,51 @@ export default function App() {
   }, [isSuperadmin, loadAdmins]);
 
   const handleCreateAdmin = useCallback(
-    async ({ name, email, password, username }) => {
+    async ({ name, email, password, username, role }) => {
       if (!token || !isSuperadmin) {
-        throw new Error('No tenés permisos para crear administradores');
+        throw new Error('No tenés permisos para crear usuarios');
       }
 
       setIsCreatingAdmin(true);
+      setRoleUpdateError(null);
       try {
         const response = await createAdmin({
           token,
-          admin: { name, email, password, username },
+          admin: { name, email, password, username, role },
         });
         setAdmins((prev) => [...prev, response.admin]);
         return response.admin;
       } finally {
         setIsCreatingAdmin(false);
+      }
+    },
+    [token, isSuperadmin]
+  );
+
+  const handleUpdateAdminRole = useCallback(
+    async ({ userId, role }) => {
+      if (!token || !isSuperadmin) {
+        throw new Error('No tenés permisos para actualizar usuarios');
+      }
+
+      setUpdatingAdminId(userId);
+      setRoleUpdateError(null);
+      try {
+        const response = await updateAdminRole({
+          token,
+          userId,
+          role,
+        });
+        setAdmins((prev) =>
+          prev.map((item) => (item.id === userId ? response.admin : item))
+        );
+        return response.admin;
+      } catch (error) {
+        const message = error.message || 'No se pudo actualizar el rol del usuario';
+        setRoleUpdateError(message);
+        throw new Error(message);
+      } finally {
+        setUpdatingAdminId(null);
       }
     },
     [token, isSuperadmin]
@@ -2300,7 +2921,13 @@ export default function App() {
 
   return (
     <div className="admin-shell">
-      <Sidebar navItems={navItems} activeItem={activeSection} onSelect={setActiveSection} />
+      <Sidebar
+        navItems={navItems}
+        activeItem={activeSection}
+        onSelect={setActiveSection}
+        user={user}
+        onLogout={logout}
+      />
 
       <main className="admin-main">
         <header className="admin-header">
@@ -2308,7 +2935,10 @@ export default function App() {
             <h1>{activeNavItem?.label ?? 'Panel'}</h1>
             <p>Gestioná tu negocio, agenda y experiencia de cara al cliente desde un mismo lugar.</p>
           </div>
-          <div className="user-chip">
+          <div className="user-chip header-user">
+            {canUpdateTheme && (
+              <ThemeToggle theme={theme} onToggle={handleToggleTheme} disabled={isThemeSaving} />
+            )}
             <div>
               <strong>{user?.name || user?.email}</strong>
               <span>{capitalize(user?.role)}</span>
@@ -2317,6 +2947,21 @@ export default function App() {
               Cerrar sesión
             </button>
           </div>
+          <nav className="admin-nav header-nav">
+            {navItems.map((item) => {
+              const isActive = activeSection === item.id;
+              return (
+                <button
+                  key={item.id}
+                  type="button"
+                  className={isActive ? 'is-active' : ''}
+                  onClick={() => setActiveSection(item.id)}
+                >
+                  {item.label}
+                </button>
+              );
+            })}
+          </nav>
         </header>
 
         <DataState isLoading={isLoadingData} error={dataError} onRetry={loadData} />
@@ -2349,7 +2994,7 @@ export default function App() {
                 staff={staff}
                 staffFilter={appointmentStaffFilter}
                 onChangeStaffFilter={setAppointmentStaffFilter}
-                onCancelAppointment={handleCancelAppointment}
+                onCancelAppointment={canCancelAppointments ? handleCancelAppointment : undefined}
                 cancellingAppointmentId={cancellingAppointmentId}
               />
             )}
@@ -2380,7 +3025,15 @@ export default function App() {
               />
             )}
 
-            {activeSection === 'branding' && <BrandingView />}
+            {activeSection === 'branding' && (
+              <BrandingView
+                branding={branding}
+                isLoading={brandingLoading}
+                isSaving={brandingSaving}
+                error={brandingError}
+                onSave={handleSaveBranding}
+              />
+            )}
 
             {activeSection === 'admins' && isSuperadmin && (
               <SuperadminView
@@ -2389,7 +3042,10 @@ export default function App() {
                 error={adminsError}
                 onReload={loadAdmins}
                 onCreateAdmin={handleCreateAdmin}
+                onUpdateAdminRole={handleUpdateAdminRole}
                 isSubmitting={isCreatingAdmin}
+                updatingAdminId={updatingAdminId}
+                roleUpdateError={roleUpdateError}
               />
             )}
           </>

@@ -1,6 +1,16 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import brandLogo from './assets/Logo_AC-removebg-preview.png';
 
+const DEFAULT_BRANDING = {
+  primaryColor: '#f97316',
+  accentColor: '#ea580c',
+  themePreference: 'light',
+  heroImageUrl: 'https://images.unsplash.com/photo-1522336572468-97b06e8ef143?auto=format&fit=crop&w=900&q=80',
+  navbarLogoUrl: brandLogo,
+  footerLogoUrl: brandLogo,
+  locationAddress: 'El Chaco 106, Córdoba Capital',
+};
+
 const SERVICE_CATEGORIES = {
   peluqueria: {
     label: 'Peluquería',
@@ -155,8 +165,6 @@ const SALON_LOCATION = {
   schedule: 'Lun a Vie · 8:00 a 13:00 y 16:00 a 21:00',
 };
 
-const THEME_STORAGE_KEY = 'turnapp-theme';
-
 const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:4000/api';
 
 const formatCurrency = (value) => {
@@ -171,17 +179,204 @@ const formatCurrency = (value) => {
   }).format(amount);
 };
 
-const getPreferredTheme = () => {
-  if (typeof window === 'undefined') {
-    return 'light';
-  }
-  const stored = window.localStorage.getItem(THEME_STORAGE_KEY);
-  if (stored === 'light' || stored === 'dark') {
-    return stored;
+const parseHexColor = (value) => {
+  if (!value || typeof value !== 'string') return null;
+  const normalized = value.trim();
+  if (!/^#[0-9a-fA-F]{6}$/.test(normalized)) return null;
+  const numeric = Number.parseInt(normalized.slice(1), 16);
+  return {
+    r: (numeric >> 16) & 255,
+    g: (numeric >> 8) & 255,
+    b: numeric & 255,
+  };
+};
+
+const toRgbString = (rgb) => `${rgb.r}, ${rgb.g}, ${rgb.b}`;
+
+const darkenHex = (value, amount = 0.18) => {
+  const rgb = parseHexColor(value);
+  if (!rgb) return value;
+  const scale = (channel) => Math.max(0, Math.min(255, Math.round(channel * (1 - amount))));
+  return `#${[scale(rgb.r), scale(rgb.g), scale(rgb.b)]
+    .map((channel) => channel.toString(16).padStart(2, '0'))
+    .join('')}`;
+};
+
+const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
+
+const rgbToHex = (rgb) =>
+  `#${[rgb.r, rgb.g, rgb.b].map((channel) => channel.toString(16).padStart(2, '0')).join('')}`;
+
+const toLinearChannel = (channel) => {
+  const normalized = channel / 255;
+  return normalized <= 0.03928 ? normalized / 12.92 : Math.pow((normalized + 0.055) / 1.055, 2.4);
+};
+
+const relativeLuminance = (rgb) =>
+  0.2126 * toLinearChannel(rgb.r) +
+  0.7152 * toLinearChannel(rgb.g) +
+  0.0722 * toLinearChannel(rgb.b);
+
+const contrastRatio = (a, b) => {
+  const lumA = relativeLuminance(a);
+  const lumB = relativeLuminance(b);
+  const [lighter, darker] = lumA >= lumB ? [lumA, lumB] : [lumB, lumA];
+  return (lighter + 0.05) / (darker + 0.05);
+};
+
+const rgbToHsl = (rgb) => {
+  const r = rgb.r / 255;
+  const g = rgb.g / 255;
+  const b = rgb.b / 255;
+  const max = Math.max(r, g, b);
+  const min = Math.min(r, g, b);
+  const delta = max - min;
+  let h = 0;
+  let s = 0;
+  const l = (max + min) / 2;
+
+  if (delta !== 0) {
+    s = l > 0.5 ? delta / (2 - max - min) : delta / (max + min);
+    switch (max) {
+      case r:
+        h = (g - b) / delta + (g < b ? 6 : 0);
+        break;
+      case g:
+        h = (b - r) / delta + 2;
+        break;
+      default:
+        h = (r - g) / delta + 4;
+    }
+    h *= 60;
   }
 
-  const systemPrefersDark = window.matchMedia?.('(prefers-color-scheme: dark)').matches;
-  return systemPrefersDark ? 'dark' : 'light';
+  return { h, s, l };
+};
+
+const hslToRgb = (h, s, l) => {
+  const c = (1 - Math.abs(2 * l - 1)) * s;
+  const x = c * (1 - Math.abs(((h / 60) % 2) - 1));
+  const m = l - c / 2;
+  let r = 0;
+  let g = 0;
+  let b = 0;
+
+  if (h >= 0 && h < 60) {
+    r = c;
+    g = x;
+  } else if (h >= 60 && h < 120) {
+    r = x;
+    g = c;
+  } else if (h >= 120 && h < 180) {
+    g = c;
+    b = x;
+  } else if (h >= 180 && h < 240) {
+    g = x;
+    b = c;
+  } else if (h >= 240 && h < 300) {
+    r = x;
+    b = c;
+  } else {
+    r = c;
+    b = x;
+  }
+
+  return {
+    r: Math.round((r + m) * 255),
+    g: Math.round((g + m) * 255),
+    b: Math.round((b + m) * 255),
+  };
+};
+
+const rgbaString = (rgb, alpha) => `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, ${alpha})`;
+
+const DARK_THEME_VARIABLES = [
+  '--surface-100',
+  '--surface-200',
+  '--surface-contrast',
+  '--surface-muted',
+  '--surface-subtle',
+  '--navbar-bg',
+  '--footer-bg',
+  '--input-bg',
+];
+
+const buildContrastOptimizedDarkPalette = (primaryColor) => {
+  const primaryRgb = parseHexColor(primaryColor);
+  if (!primaryRgb) return null;
+
+  const primaryHsl = rgbToHsl(primaryRgb);
+  const hue = primaryHsl.h;
+  const saturation = clamp(primaryHsl.s * 0.35, 0.08, 0.28);
+  let bestCandidate = null;
+
+  for (let lightness = 0.04; lightness <= 0.18; lightness += 0.004) {
+    const candidateRgb = hslToRgb(hue, saturation, lightness);
+    const ratio = contrastRatio(primaryRgb, candidateRgb);
+    if (
+      !bestCandidate ||
+      ratio > bestCandidate.ratio ||
+      (ratio === bestCandidate.ratio && lightness < bestCandidate.lightness)
+    ) {
+      bestCandidate = {
+        rgb: candidateRgb,
+        lightness,
+        ratio,
+      };
+    }
+  }
+
+  if (!bestCandidate) return null;
+  const baseHsl = rgbToHsl(bestCandidate.rgb);
+  const surface100 = bestCandidate.rgb;
+  const surface200 = hslToRgb(baseHsl.h, baseHsl.s, clamp(baseHsl.l + 0.06, 0, 0.22));
+  const surfaceContrast = hslToRgb(baseHsl.h, baseHsl.s, clamp(baseHsl.l + 0.03, 0, 0.22));
+  const surfaceSubtle = hslToRgb(baseHsl.h, baseHsl.s, clamp(baseHsl.l + 0.12, 0, 0.3));
+
+  return {
+    '--surface-100': rgbToHex(surface100),
+    '--surface-200': rgbToHex(surface200),
+    '--surface-contrast': rgbToHex(surfaceContrast),
+    '--surface-muted': rgbaString(surface200, 0.85),
+    '--surface-subtle': rgbaString(surfaceSubtle, 0.55),
+    '--navbar-bg': rgbaString(surface100, 0.85),
+    '--footer-bg': rgbToHex(surfaceContrast),
+    '--input-bg': rgbaString(surfaceContrast, 0.65),
+  };
+};
+
+const applyDarkThemeOverrides = (primaryColor, theme) => {
+  if (typeof document === 'undefined') return;
+  const root = document.documentElement;
+  if (theme !== 'dark') {
+    DARK_THEME_VARIABLES.forEach((name) => root.style.removeProperty(name));
+    return;
+  }
+  const palette = buildContrastOptimizedDarkPalette(primaryColor);
+  if (!palette) return;
+  Object.entries(palette).forEach(([name, value]) => root.style.setProperty(name, value));
+};
+
+const applyBrandingVariables = (branding) => {
+  const primaryColor = branding?.primaryColor || DEFAULT_BRANDING.primaryColor;
+  const accentColor = branding?.accentColor || DEFAULT_BRANDING.accentColor;
+  const primaryRgb = parseHexColor(primaryColor) || parseHexColor(DEFAULT_BRANDING.primaryColor);
+  const accentRgb = parseHexColor(accentColor) || parseHexColor(DEFAULT_BRANDING.accentColor);
+
+  if (!primaryRgb || !accentRgb) return;
+
+  const normalizedAccent = accentColor.trim().toLowerCase();
+  const isAccentWhite = normalizedAccent === '#ffffff';
+  const root = document.documentElement;
+  root.style.setProperty('--brand-500', primaryColor);
+  root.style.setProperty('--brand-600', accentColor);
+  root.style.setProperty('--brand-700', darkenHex(accentColor, 0.2));
+  root.style.setProperty('--focus-outline', `2px solid rgba(${toRgbString(primaryRgb)}, 0.4)`);
+  root.style.setProperty('--surface-highlight', `rgba(${toRgbString(primaryRgb)}, 0.12)`);
+  root.style.setProperty('--surface-highlight-strong', `rgba(${toRgbString(primaryRgb)}, 0.28)`);
+  root.style.setProperty('--shadow-xl', `0 30px 60px rgba(${toRgbString(accentRgb)}, 0.25)`);
+  root.style.setProperty('--shadow-hero', `0 25px 50px rgba(${toRgbString(accentRgb)}, 0.3)`);
+  root.style.setProperty('--cta-hover-text', isAccentWhite ? 'var(--surface-100)' : '#ffffff');
 };
 
 const getSlotsForDate = (date) => {
@@ -193,94 +388,18 @@ const getSlotsForDate = (date) => {
 
 const PAYMENT_METHODS = [
   {
-    id: 'qr',
-    label: 'QR',
-    description: 'Te mostramos un código para que pagues con cualquier billetera compatible.',
-    details: 'El QR expira en 10 minutos. Tené tu app lista antes de escanearlo.',
-  },
-  {
     id: 'mercado-pago',
     label: 'Mercado Pago',
     description: 'Iniciá sesión en tu cuenta de Mercado Pago y pagá en cuotas o con dinero en cuenta.',
     details: 'Se aplican promociones bancarias disponibles al momento del pago.',
   },
-  {
-    id: 'transferencia',
-    label: 'Transferencia bancaria',
-    description: 'Te damos los datos de la cuenta para que completes la transferencia.',
-    details: 'Recordá subir el comprobante para confirmar tu turno.',
-  },
 ];
 
-function SunIcon(props) {
-  return (
-    <svg
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.8"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      {...props}
-    >
-      <circle cx="12" cy="12" r="4" />
-      <path d="M12 2v2" />
-      <path d="M12 20v2" />
-      <path d="m4.93 4.93 1.41 1.41" />
-      <path d="m17.66 17.66 1.41 1.41" />
-      <path d="M2 12h2" />
-      <path d="M20 12h2" />
-      <path d="m6.34 17.66-1.41 1.41" />
-      <path d="m19.07 4.93-1.41 1.41" />
-    </svg>
-  );
-}
-
-function MoonIcon(props) {
-  return (
-    <svg
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.8"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      {...props}
-    >
-      <path d="M21 12.79A9 9 0 0 1 11.21 3 7 7 0 1 0 21 12.79Z" />
-    </svg>
-  );
-}
-
-function ThemeToggle({ theme, onToggle }) {
-  const isDark = theme === 'dark';
-  return (
-    <button
-      type="button"
-      className={`theme-toggle ${isDark ? 'is-dark' : ''}`}
-      onClick={onToggle}
-      role="switch"
-      aria-checked={isDark}
-      aria-label={isDark ? 'Cambiar a modo claro' : 'Cambiar a modo oscuro'}
-    >
-      <span className="theme-toggle-icon" aria-hidden>
-        <SunIcon />
-      </span>
-      <span className="theme-toggle-track" aria-hidden>
-        <span className="theme-toggle-thumb" />
-      </span>
-      <span className="theme-toggle-icon" aria-hidden>
-        <MoonIcon />
-      </span>
-    </button>
-  );
-}
-
-function Navbar({ onReserveClick, onNavigateHome, isBooking, theme, onToggleTheme }) {
+function Navbar({ onReserveClick, onNavigateHome, isBooking, logoUrl }) {
   return (
     <header className="navbar">
       <button type="button" className="brand-button" onClick={onNavigateHome}>
-        <img src={brandLogo} alt="Aaron Cordoba Barbería y Peluquería" />
+        <img src={logoUrl} alt="Aaron Cordoba Barbería y Peluquería" />
       </button>
       {!isBooking && (
         <nav className="nav-links">
@@ -291,7 +410,6 @@ function Navbar({ onReserveClick, onNavigateHome, isBooking, theme, onToggleThem
         </nav>
       )}
       <div className="navbar-actions">
-        <ThemeToggle theme={theme} onToggle={onToggleTheme} />
         <button className="button" type="button" onClick={onReserveClick}>
           Reservar turno
         </button>
@@ -300,7 +418,7 @@ function Navbar({ onReserveClick, onNavigateHome, isBooking, theme, onToggleThem
   );
 }
 
-function Hero({ onReserveClick, reserveButtonRef }) {
+function Hero({ onReserveClick, reserveButtonRef, heroImageUrl }) {
   const slides = useMemo(() => [...METRICS, METRICS[0]], []);
   const [activeMetric, setActiveMetric] = useState(0);
   const [isAnimating, setIsAnimating] = useState(true);
@@ -397,11 +515,7 @@ function Hero({ onReserveClick, reserveButtonRef }) {
           </div>
         </div>
         <div className="stack hero-media">
-          <img
-            src="https://images.unsplash.com/photo-1522336572468-97b06e8ef143?auto=format&fit=crop&w=900&q=80"
-            alt="Estilista trabajando con una clienta"
-            loading="lazy"
-          />
+          <img src={heroImageUrl} alt="Estilista trabajando con una clienta" loading="lazy" />
         </div>
         <div className="metrics-carousel" aria-live="polite">
           <div
@@ -778,8 +892,8 @@ function Testimonials() {
   );
 }
 
-function CallToAction({ onReserveClick }) {
-  const mapQuery = `${SALON_LOCATION.latitude},${SALON_LOCATION.longitude}`;
+function CallToAction({ onReserveClick, locationAddress }) {
+  const mapQuery = locationAddress || `${SALON_LOCATION.latitude},${SALON_LOCATION.longitude}`;
   const mapEmbedUrl = `https://maps.google.com/maps?q=${encodeURIComponent(mapQuery)}&z=16&output=embed`;
   const mapsLink = `https://maps.google.com/?q=${encodeURIComponent(mapQuery)}`;
 
@@ -789,7 +903,7 @@ function CallToAction({ onReserveClick }) {
         <div className="cta-card map-card">
           <div className="cta-map-info">
             <h2 className="headline cta-map-heading">Conocé nuestra ubicación y horarios</h2>
-            <p className="cta-map-description">{SALON_LOCATION.address}</p>
+            <p className="cta-map-description">{locationAddress || SALON_LOCATION.address}</p>
             <p className="cta-map-schedule">{SALON_LOCATION.schedule}</p>
           </div>
           <div className="cta-map-container">
@@ -1729,6 +1843,8 @@ function Checkout({ data, onBack, onReturnHome }) {
   const paymentListRef = useRef(null);
   const [canScrollPaymentLeft, setCanScrollPaymentLeft] = useState(false);
   const [canScrollPaymentRight, setCanScrollPaymentRight] = useState(false);
+  const [isPaying, setIsPaying] = useState(false);
+  const [paymentError, setPaymentError] = useState(null);
 
   const updatePaymentScrollState = useCallback(() => {
     const container = paymentListRef.current;
@@ -1802,6 +1918,58 @@ function Checkout({ data, onBack, onReturnHome }) {
       });
     } else {
       updatePaymentScrollState();
+    }
+  };
+
+  const parsePriceValue = (value) => {
+    if (typeof value === 'number') return value;
+    if (!value) return 0;
+    const normalized = String(value).replace(/[^\d,.-]/g, '').replace(/\./g, '').replace(',', '.');
+    const parsed = Number(normalized);
+    return Number.isNaN(parsed) ? 0 : parsed;
+  };
+
+  const handlePay = async () => {
+    if (!data?.service) return;
+    setPaymentError(null);
+    setIsPaying(true);
+
+    try {
+      const unitPrice =
+        typeof data.service.priceValue === 'number'
+          ? data.service.priceValue
+          : parsePriceValue(data.service.price);
+      const payload = {
+        title: data.service.name || 'Turno',
+        unitPrice,
+        quantity: 1,
+        bookingId: data?.booking?.id,
+        customer: {
+          name: data?.customer?.name,
+          email: data?.customer?.email,
+          phone: data?.customer?.phone,
+        },
+      };
+
+      const response = await fetch(`${API_BASE_URL}/public/payments/mercadopago`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(result?.message || 'No pudimos iniciar el pago.');
+      }
+      if (result?.initPoint) {
+        window.location.href = result.initPoint;
+        return;
+      }
+      throw new Error('No pudimos obtener el enlace de pago.');
+    } catch (error) {
+      console.error('[Public] Error al iniciar pago', error);
+      setPaymentError(error.message || 'No pudimos iniciar el pago.');
+    } finally {
+      setIsPaying(false);
     }
   };
 
@@ -1896,9 +2064,16 @@ function Checkout({ data, onBack, onReturnHome }) {
           <div className="payment-method-details">
             <h3>Pasos para pagar</h3>
             <p>{activeMethod.details}</p>
-            <button type="button" className="button" style={{ marginTop: '1.5rem' }}>
-              Simular pago con {activeMethod.label}
+            <button
+              type="button"
+              className="button"
+              style={{ marginTop: '1.5rem' }}
+              onClick={handlePay}
+              disabled={isPaying}
+            >
+              {isPaying ? 'Redirigiendo...' : 'Pagar'}
             </button>
+            {paymentError ? <p className="form-error">{paymentError}</p> : null}
           </div>
         </section>
       </div>
@@ -1906,14 +2081,14 @@ function Checkout({ data, onBack, onReturnHome }) {
   );
 }
 
-function Footer({ isBooking }) {
+function Footer({ isBooking, footerLogoUrl }) {
   const currentYear = new Date().getFullYear();
 
   return (
     <footer className="footer">
       <div className="container footer-content">
         <div className="footer-logo">
-          <img src={brandLogo} alt="Aaron Cordoba Barbería y Peluquería" />
+          <img src={footerLogoUrl} alt="Aaron Cordoba Barbería y Peluquería" />
         </div>
         {!isBooking && (
           <div className="footer-links">
@@ -1932,14 +2107,8 @@ function Footer({ isBooking }) {
 function App() {
   const [view, setView] = useState('home');
   const [checkoutData, setCheckoutData] = useState(null);
-  const [theme, setTheme] = useState(() => {
-    const preferred = getPreferredTheme();
-    if (typeof document !== 'undefined') {
-      document.documentElement.dataset.theme = preferred;
-      document.documentElement.classList.toggle('is-dark-mode', preferred === 'dark');
-    }
-    return preferred;
-  });
+  const [branding, setBranding] = useState(null);
+  const [theme, setTheme] = useState(DEFAULT_BRANDING.themePreference);
   const isFlow = view === 'booking' || view === 'checkout';
   const isHomeView = view === 'home';
   const [showFloatingCTA, setShowFloatingCTA] = useState(false);
@@ -1950,6 +2119,41 @@ function App() {
   const [bookingServices, setBookingServices] = useState([]);
   const [isLoadingServices, setIsLoadingServices] = useState(false);
   const [servicesError, setServicesError] = useState(null);
+  const navbarLogoUrl = branding?.navbarLogoUrl || DEFAULT_BRANDING.navbarLogoUrl;
+  const footerLogoUrl = branding?.footerLogoUrl || DEFAULT_BRANDING.footerLogoUrl;
+  const heroImageUrl = branding?.heroImageUrl || DEFAULT_BRANDING.heroImageUrl;
+  const locationAddress = branding?.locationAddress || DEFAULT_BRANDING.locationAddress || SALON_LOCATION.address;
+
+  useEffect(() => {
+    applyBrandingVariables(branding || DEFAULT_BRANDING);
+  }, [branding]);
+
+  useEffect(() => {
+    const preferred = branding?.themePreference || DEFAULT_BRANDING.themePreference;
+    setTheme((current) => (current === preferred ? current : preferred));
+  }, [branding]);
+
+  useEffect(() => {
+    const controller = new AbortController();
+
+    const loadBranding = async () => {
+      try {
+        const response = await fetch(`${API_BASE_URL}/public/branding`, { signal: controller.signal });
+        if (!response.ok) return;
+        const payload = await response.json();
+        if (!controller.signal.aborted) {
+          setBranding(payload?.branding ?? null);
+        }
+      } catch (error) {
+        if (error.name !== 'AbortError') {
+          console.error('[Public] Error al cargar branding', error);
+        }
+      }
+    };
+
+    loadBranding();
+    return () => controller.abort();
+  }, []);
   const loadBarbers = useCallback(
     async (signal) => {
       const controllerSignal = signal;
@@ -2007,6 +2211,7 @@ function App() {
           .filter((item) => item?.active !== false)
           .map((item) => ({
             ...item,
+            priceValue: item.price,
             price: formatCurrency(item.price),
           }));
         setBookingServices(normalized);
@@ -2058,8 +2263,9 @@ function App() {
 
     document.documentElement.dataset.theme = theme;
     document.documentElement.classList.toggle('is-dark-mode', theme === 'dark');
-    window.localStorage.setItem(THEME_STORAGE_KEY, theme);
-  }, [theme]);
+    const primaryColor = branding?.primaryColor || DEFAULT_BRANDING.primaryColor;
+    applyDarkThemeOverrides(primaryColor, theme);
+  }, [theme, branding]);
 
   useEffect(() => {
     if (typeof document === 'undefined') {
@@ -2130,18 +2336,13 @@ function App() {
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
-  const toggleTheme = () => {
-    setTheme((current) => (current === 'light' ? 'dark' : 'light'));
-  };
-
   return (
     <div className="main-shell">
       <Navbar
         onReserveClick={handleReserveClick}
         onNavigateHome={handleNavigateHome}
         isBooking={isFlow}
-        theme={theme}
-        onToggleTheme={toggleTheme}
+        logoUrl={navbarLogoUrl}
       />
       <main className={`main-content${isHomeView && showFloatingCTA ? ' has-floating-cta' : ''}`}>
         {view === 'booking' ? (
@@ -2161,16 +2362,20 @@ function App() {
           <Checkout data={checkoutData} onBack={handleBackToBooking} onReturnHome={handleNavigateHome} />
         ) : (
           <>
-            <Hero onReserveClick={handleReserveClick} reserveButtonRef={heroReserveButtonRef} />
+            <Hero
+              onReserveClick={handleReserveClick}
+              reserveButtonRef={heroReserveButtonRef}
+              heroImageUrl={heroImageUrl}
+            />
             <Services onReserveClick={handleReserveClick} />
             <HowItWorks />
             <Testimonials />
-            <CallToAction onReserveClick={handleReserveClick} />
+            <CallToAction onReserveClick={handleReserveClick} locationAddress={locationAddress} />
           </>
         )}
       </main>
       {isHomeView && showFloatingCTA && <FloatingReserveCTA onClick={handleReserveClick} />}
-      <Footer isBooking={isFlow} />
+      <Footer isBooking={isFlow} footerLogoUrl={footerLogoUrl} />
     </div>
   );
 }

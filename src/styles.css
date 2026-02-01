@@ -193,14 +193,14 @@ button:focus-visible {
 }
 
 .button {
-  background: linear-gradient(135deg, var(--brand-500), var(--brand-600));
+  background: var(--brand-500);
   color: var(--text-inverse);
   font-weight: 600;
   padding: 0.9rem 1.6rem;
   border: none;
   border-radius: 999px;
   cursor: pointer;
-  transition: transform 150ms ease, box-shadow 150ms ease;
+  transition: transform 150ms ease, background 150ms ease;
 }
 
 .button.secondary {
@@ -210,7 +210,7 @@ button:focus-visible {
 
 .button:hover {
   transform: translateY(-1px);
-  box-shadow: 0 15px 30px rgba(249, 115, 22, 0.25);
+  background: var(--brand-600);
 }
 
 .button.secondary:hover {
@@ -351,7 +351,7 @@ html.is-dark-mode .footer-logo img {
 }
 
 .hero {
-  text-align: center;
+  text-align: left;
 }
 
 .hero .stack-sm {
@@ -364,10 +364,12 @@ html.is-dark-mode .footer-logo img {
 
 .hero .headline {
   margin-bottom: 1rem;
+  text-align: justify;
 }
 
 .hero .subheadline {
   margin-bottom: 1.5rem;
+  text-align: justify;
 }
 
 .hero-actions {
@@ -708,14 +710,13 @@ html.is-dark-mode .footer-logo img {
 }
 
 .cta-card {
-  background: linear-gradient(120deg, rgba(249, 115, 22, 0.92), rgba(234, 88, 12, 0.92));
+  background: var(--brand-500);
   color: var(--text-inverse);
   border-radius: 1.6rem;
   padding: 2.4rem;
   display: grid;
   gap: 1.5rem;
   text-align: center;
-  box-shadow: 0 30px 60px rgba(234, 88, 12, 0.25);
 }
 
 .cta-card.map-card {
@@ -801,7 +802,7 @@ html.is-dark-mode .footer-logo img {
 .cta-map-button:hover,
 .cta-map-button:focus-visible {
   background: rgba(16, 24, 44, 0.85);
-  color: var(--brand-600);
+  color: #ffffff;
 }
 
 .cta-subtitle {
