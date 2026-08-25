@@ -6,6 +6,7 @@ const appointmentsRoutes = require('./routes/appointments.routes');
 const servicesRoutes = require('./routes/services.routes');
 const metricsRoutes = require('./routes/metrics.routes');
 const staffRoutes = require('./routes/staff.routes');
+const brandingRoutes = require('./routes/branding.routes');
 const publicRoutes = require('./routes/public.routes');
 
 const app = express();
@@ -27,6 +28,7 @@ app.use('/api/appointments', appointmentsRoutes);
 app.use('/api/services', servicesRoutes);
 app.use('/api/metrics', metricsRoutes);
 app.use('/api/staff', staffRoutes);
+app.use('/api/branding', brandingRoutes);
 app.use('/api/public', publicRoutes);
 
 app.use((req, res) => {

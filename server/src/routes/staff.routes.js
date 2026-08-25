@@ -10,13 +10,14 @@ const {
 
 const router = express.Router();
 
-router.use(authenticate, authorize(['admin', 'superadmin']));
+router.use(authenticate);
 
-router.get('/', (req, res) => {
-  return res.json({ staff: listStaff() });
+router.get('/', authorize(['admin', 'staff', 'superadmin']), async (req, res) => {
+  const staff = await listStaff();
+  return res.json({ staff });
 });
 
-router.post('/', (req, res) => {
+router.post('/', authorize(['admin', 'superadmin']), async (req, res) => {
   const { name, role, availability, specialties, avatar, workSchedule, slotDurationMinutes } = req.body ?? {};
 
   try {
@@ -30,7 +31,7 @@ router.post('/', (req, res) => {
         ? specialties
         : [];
 
-    const member = addStaffMember({
+    const member = await addStaffMember({
       name,
       role,
       availability,
@@ -52,7 +53,7 @@ router.post('/', (req, res) => {
   }
 });
 
-router.patch('/:id', (req, res) => {
+router.patch('/:id', authorize(['admin', 'superadmin']), async (req, res) => {
   const { id } = req.params;
   const { name, role, availability, specialties, avatar, workSchedule, slotDurationMinutes } = req.body ?? {};
 
@@ -67,7 +68,7 @@ router.patch('/:id', (req, res) => {
         ? specialties
         : undefined;
 
-    const updated = updateStaffMember(id, {
+    const updated = await updateStaffMember(id, {
       name,
       role,
       availability,
@@ -88,11 +89,11 @@ router.patch('/:id', (req, res) => {
   }
 });
 
-router.delete('/:id', (req, res) => {
+router.delete('/:id', authorize(['admin', 'superadmin']), async (req, res) => {
   const { id } = req.params;
 
   try {
-    removeStaffMember(id);
+    await removeStaffMember(id);
     return res.status(204).send();
   } catch (error) {
     if (error.message === 'STAFF_NOT_FOUND') {
@@ -102,12 +103,12 @@ router.delete('/:id', (req, res) => {
   }
 });
 
-router.patch('/:id/schedule', (req, res) => {
+router.patch('/:id/schedule', authorize(['admin', 'superadmin']), async (req, res) => {
   const { id } = req.params;
   const { defaultStart, defaultEnd, overrides, slotDurationMinutes } = req.body ?? {};
 
   try {
-    const updated = updateStaffSchedule(id, { defaultStart, defaultEnd, overrides, slotDurationMinutes });
+    const updated = await updateStaffSchedule(id, { defaultStart, defaultEnd, overrides, slotDurationMinutes });
     return res.json({ staff: updated });
   } catch (error) {
     if (error.message === 'STAFF_NOT_FOUND') {

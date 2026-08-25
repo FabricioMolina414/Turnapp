@@ -9,6 +9,13 @@ const DEFAULT_BRANDING = {
   navbarLogoUrl: brandLogo,
   footerLogoUrl: brandLogo,
   locationAddress: 'El Chaco 106, Córdoba Capital',
+  businessHours: '',
+  whatsappPhone: '',
+  instagramUrl: '',
+  transferAlias: '',
+  transferAccountHolder: '',
+  transferDestination: '',
+  workGallery: [],
 };
 
 const SERVICE_CATEGORIES = {
@@ -20,18 +27,24 @@ const SERVICE_CATEGORIES = {
         description: 'Cortes personalizados, brushing y peinados para cada ocasión.',
         duration: '45 min',
         price: '$6.500',
+        imageUrl:
+          'https://images.unsplash.com/photo-1622286342621-4bd786c2447c?auto=format&fit=crop&w=1000&q=80',
       },
       {
         name: 'Color Experto',
         description: 'Balayage, iluminaciones y color global con diagnóstico previo.',
         duration: '120 min',
         price: 'Desde $18.000',
+        imageUrl:
+          'https://images.unsplash.com/photo-1562322140-8baeececf3df?auto=format&fit=crop&w=1000&q=80',
       },
       {
         name: 'Tratamientos Capilares',
         description: 'Shock de keratina, nutrición profunda y terapias hidratantes.',
         duration: '60 min',
         price: '$10.500',
+        imageUrl:
+          'https://images.unsplash.com/photo-1521590832167-7bcbfaa6381f?auto=format&fit=crop&w=1000&q=80',
       },
     ],
   },
@@ -166,6 +179,7 @@ const SALON_LOCATION = {
 };
 
 const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:4000/api';
+const PUBLIC_THEME_STORAGE_KEY = 'turnapp_public_theme';
 
 const formatCurrency = (value) => {
   const amount = Number(value);
@@ -386,16 +400,98 @@ const getSlotsForDate = (date) => {
   return DAILY_SLOTS.weekday;
 };
 
-const PAYMENT_METHODS = [
-  {
-    id: 'mercado-pago',
-    label: 'Mercado Pago',
-    description: 'Iniciá sesión en tu cuenta de Mercado Pago y pagá en cuotas o con dinero en cuenta.',
-    details: 'Se aplican promociones bancarias disponibles al momento del pago.',
-  },
-];
+const buildTransferDetails = (branding) => {
+  const details = [];
+  if (branding?.transferAlias) details.push({ label: 'Alias', value: branding.transferAlias });
+  if (branding?.transferAccountHolder)
+    details.push({ label: 'Titular', value: branding.transferAccountHolder });
+  if (branding?.transferDestination)
+    details.push({ label: 'Cuenta destino', value: branding.transferDestination });
+  return details;
+};
 
-function Navbar({ onReserveClick, onNavigateHome, isBooking, logoUrl }) {
+const normalizeWorkGallery = (value) => {
+  if (!Array.isArray(value)) return [];
+
+  return value
+    .map((item, index) => {
+      const cardNumber = Number.parseInt(item?.cardNumber, 10) || index + 1;
+      return {
+        cardNumber,
+        imageUrl: typeof item?.imageUrl === 'string' ? item.imageUrl : '',
+        title: typeof item?.title === 'string' ? item.title : '',
+        description: typeof item?.description === 'string' ? item.description : '',
+      };
+    })
+    .sort((a, b) => a.cardNumber - b.cardNumber)
+    .filter((item) => Boolean(item.imageUrl));
+};
+
+function SunIcon(props) {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.8"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      {...props}
+    >
+      <circle cx="12" cy="12" r="4" />
+      <path d="M12 2v2" />
+      <path d="M12 20v2" />
+      <path d="m4.93 4.93 1.41 1.41" />
+      <path d="m17.66 17.66 1.41 1.41" />
+      <path d="M2 12h2" />
+      <path d="M20 12h2" />
+      <path d="m6.34 17.66-1.41 1.41" />
+      <path d="m19.07 4.93-1.41 1.41" />
+    </svg>
+  );
+}
+
+function MoonIcon(props) {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.8"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      {...props}
+    >
+      <path d="M21 12.79A9 9 0 0 1 11.21 3 7 7 0 1 0 21 12.79Z" />
+    </svg>
+  );
+}
+
+function ThemeToggle({ theme, onToggle }) {
+  const isDark = theme === 'dark';
+  return (
+    <button
+      type="button"
+      className={`theme-toggle ${isDark ? 'is-dark' : ''}`}
+      onClick={onToggle}
+      role="switch"
+      aria-checked={isDark}
+      aria-label={isDark ? 'Cambiar a modo claro' : 'Cambiar a modo oscuro'}
+    >
+      <span className="theme-toggle-icon" aria-hidden>
+        <SunIcon />
+      </span>
+      <span className="theme-toggle-track" aria-hidden>
+        <span className="theme-toggle-thumb" />
+      </span>
+      <span className="theme-toggle-icon" aria-hidden>
+        <MoonIcon />
+      </span>
+    </button>
+  );
+}
+
+function Navbar({ onReserveClick, onNavigateHome, isBooking, logoUrl, theme, onToggleTheme }) {
   return (
     <header className="navbar">
       <button type="button" className="brand-button" onClick={onNavigateHome}>
@@ -410,6 +506,7 @@ function Navbar({ onReserveClick, onNavigateHome, isBooking, logoUrl }) {
         </nav>
       )}
       <div className="navbar-actions">
+        <ThemeToggle theme={theme} onToggle={onToggleTheme} />
         <button className="button" type="button" onClick={onReserveClick}>
           Reservar turno
         </button>
@@ -492,10 +589,9 @@ function Hero({ onReserveClick, reserveButtonRef, heroImageUrl }) {
     isMobileCarousel && slideWidth ? -activeMetric * slideWidth : 0;
 
   return (
-    <section className="section is-accent" id="inicio">
+    <section className="section is-accent landing-section" id="inicio">
       <div className="container hero-grid stack-lg">
         <div className="stack-lg hero">
-          <span className="badge">Turnero inteligente para salones</span>
           <div className="stack-sm">
             <h1 className="headline">Recibí tus turnos sin contestar mensajes</h1>
             <p className="subheadline">
@@ -550,18 +646,55 @@ function Hero({ onReserveClick, reserveButtonRef, heroImageUrl }) {
   );
 }
 
-function Services({ onReserveClick }) {
-  const [activeTab, setActiveTab] = useState('peluqueria');
+function Services({ branding }) {
+  const activeTab = 'peluqueria';
   const services = useMemo(() => SERVICE_CATEGORIES[activeTab].services, [activeTab]);
+  const workGallery = useMemo(() => normalizeWorkGallery(branding?.workGallery), [branding]);
+  const displayedServices = useMemo(() => {
+    if (!workGallery.length) return services;
+
+    return workGallery.map((item, index) => {
+      const fallback = services[index] ?? {};
+      return {
+        name: item.title || fallback.name || `Trabajo ${item.cardNumber}`,
+        description: item.description || fallback.description || 'Trabajo realizado en nuestro salón.',
+        imageUrl: item.imageUrl || fallback.imageUrl,
+      };
+    });
+  }, [workGallery, services]);
+  const useDesktopCarousel = displayedServices.length >= 4;
   const serviceListRef = useRef(null);
   const [activeSlide, setActiveSlide] = useState(0);
+  const [canScrollServiceLeft, setCanScrollServiceLeft] = useState(false);
+  const [canScrollServiceRight, setCanScrollServiceRight] = useState(false);
+  const totalPages = useDesktopCarousel
+    ? Math.ceil(displayedServices.length / 3)
+    : displayedServices.length;
+
+  const updateServiceScrollState = useCallback(() => {
+    const listEl = serviceListRef.current;
+    if (!listEl) return;
+
+    const isDesktop = window.matchMedia('(min-width: 720px)').matches;
+    if (!(isDesktop && useDesktopCarousel)) {
+      setCanScrollServiceLeft(false);
+      setCanScrollServiceRight(false);
+      return;
+    }
+
+    const maxScrollLeft = Math.max(0, listEl.scrollWidth - listEl.clientWidth);
+    const tolerance = 4;
+    setCanScrollServiceLeft(listEl.scrollLeft > tolerance);
+    setCanScrollServiceRight(listEl.scrollLeft < maxScrollLeft - tolerance);
+  }, [useDesktopCarousel]);
 
   useEffect(() => {
     setActiveSlide(0);
     if (serviceListRef.current) {
       serviceListRef.current.scrollTo({ left: 0, behavior: 'auto' });
     }
-  }, [activeTab]);
+    updateServiceScrollState();
+  }, [activeTab, displayedServices.length, updateServiceScrollState, useDesktopCarousel]);
 
   useEffect(() => {
     const listEl = serviceListRef.current;
@@ -569,8 +702,21 @@ function Services({ onReserveClick }) {
 
     const handleScroll = () => {
       const isDesktop = window.matchMedia('(min-width: 720px)').matches;
-      if (isDesktop) {
+      if (isDesktop && !useDesktopCarousel) {
         setActiveSlide(0);
+        return;
+      }
+
+      if (isDesktop && useDesktopCarousel) {
+        const pageWidth = listEl.clientWidth;
+        if (!pageWidth) {
+          setActiveSlide(0);
+          return;
+        }
+        const rawPage = Math.round(listEl.scrollLeft / pageWidth);
+        const clampedPage = Math.min(totalPages - 1, Math.max(0, rawPage));
+        setActiveSlide((prev) => (prev === clampedPage ? prev : clampedPage));
+        updateServiceScrollState();
         return;
       }
 
@@ -586,13 +732,15 @@ function Services({ onReserveClick }) {
       if (step <= 0) {
         step = cards[0].offsetWidth;
       }
-      if (!step) {
-        return;
-      }
+      if (!step) return;
 
       const rawIndex = Math.round((listEl.scrollLeft - baseOffset) / step);
       const clampedIndex = Math.min(cards.length - 1, Math.max(0, rawIndex));
-      setActiveSlide((prev) => (prev === clampedIndex ? prev : clampedIndex));
+      const indicatorIndex = useDesktopCarousel
+        ? Math.min(totalPages - 1, Math.max(0, Math.floor(clampedIndex / 3)))
+        : clampedIndex;
+      setActiveSlide((prev) => (prev === indicatorIndex ? prev : indicatorIndex));
+      updateServiceScrollState();
     };
 
     handleScroll();
@@ -603,10 +751,16 @@ function Services({ onReserveClick }) {
       listEl.removeEventListener('scroll', handleScroll);
       window.removeEventListener('resize', handleScroll);
     };
-  }, [services]);
+  }, [displayedServices, totalPages, updateServiceScrollState, useDesktopCarousel]);
+
+  const handleScrollServices = (direction) => {
+    const listEl = serviceListRef.current;
+    if (!listEl) return;
+    listEl.scrollBy({ left: direction * listEl.clientWidth, behavior: 'smooth' });
+  };
 
   return (
-    <section className="section is-contrast" id="servicios">
+    <section className="section is-contrast landing-section" id="servicios">
       <div className="container stack-lg">
         <div className="stack-sm">
           <div className="stack-sm">
@@ -619,46 +773,52 @@ function Services({ onReserveClick }) {
             </p>
           </div>
         </div>
-        <div className="tablist" role="tablist">
-          {Object.entries(SERVICE_CATEGORIES).map(([key, info]) => (
-            <button
-              key={key}
-              type="button"
-              className={`tab ${activeTab === key ? 'is-active' : ''}`}
-              onClick={() => setActiveTab(key)}
-              role="tab"
-              aria-selected={activeTab === key}
-            >
-              {info.label}
-            </button>
-          ))}
+        <div className={`services-carousel${useDesktopCarousel ? ' is-desktop-carousel' : ''}`}>
+          <button
+            type="button"
+            className={`services-nav services-nav-left${canScrollServiceLeft ? '' : ' is-hidden'}`}
+            onClick={() => handleScrollServices(-1)}
+            aria-label="Ver servicios anteriores"
+            disabled={!canScrollServiceLeft}
+          >
+            <span aria-hidden>‹</span>
+          </button>
+          <div
+            className={`services-grid${useDesktopCarousel ? ' is-desktop-carousel' : ''}`}
+            role="tabpanel"
+            ref={serviceListRef}
+          >
+            {displayedServices.map((service, index) => (
+              <article key={`service-card-${index + 1}`} className="service-card">
+                <div className="service-card-media">
+                  <img src={service.imageUrl} alt={service.name} loading="lazy" />
+                </div>
+                <div className="service-tag">
+                  <span aria-hidden>●</span>
+                  {SERVICE_CATEGORIES[activeTab].label}
+                </div>
+                <div className="stack-sm">
+                  <h3>{service.name}</h3>
+                  <p>{service.description}</p>
+                </div>
+              </article>
+            ))}
+          </div>
+          <button
+            type="button"
+            className={`services-nav services-nav-right${canScrollServiceRight ? '' : ' is-hidden'}`}
+            onClick={() => handleScrollServices(1)}
+            aria-label="Ver más servicios"
+            disabled={!canScrollServiceRight}
+          >
+            <span aria-hidden>›</span>
+          </button>
         </div>
-        <div className="services-grid" role="tabpanel" ref={serviceListRef}>
-          {services.map((service) => (
-            <article key={service.name} className="service-card">
-              <div className="service-tag">
-                <span aria-hidden>●</span>
-                {SERVICE_CATEGORIES[activeTab].label}
-              </div>
-              <div className="stack-sm">
-                <h3>{service.name}</h3>
-                <p>{service.description}</p>
-              </div>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <span style={{ fontWeight: 600 }}>{service.price}</span>
-                <span style={{ color: 'var(--neutral-600)', fontSize: '0.85rem' }}>{service.duration}</span>
-              </div>
-              <button className="button" type="button" style={{ alignSelf: 'flex-start' }} onClick={onReserveClick}>
-                Reservar turno
-              </button>
-            </article>
-          ))}
-        </div>
-        {services.length > 1 && (
+        {totalPages > 1 && (
           <div className="services-indicators" aria-hidden="true">
-            {services.map((service, index) => (
+            {Array.from({ length: totalPages }).map((_, index) => (
               <span
-                key={service.name}
+                key={`services-page-${index + 1}`}
                 className={`services-indicator${index === activeSlide ? ' is-active' : ''}`}
               />
             ))}
@@ -717,7 +877,7 @@ function HowItWorks() {
   }, []);
 
   return (
-    <section className="section is-accent" id="como-funciona">
+    <section className="section is-accent landing-section" id="como-funciona">
       <div className="container stack-lg">
         <h2 className="headline" style={{ fontSize: '2rem' }}>
           Pasos claros para vos y tus clientas
@@ -837,7 +997,7 @@ function Testimonials() {
     isMobileCarousel && slideWidth ? -activeSlide * slideWidth : 0;
 
   return (
-    <section className="section is-contrast" id="reseñas">
+    <section className="section is-contrast landing-section" id="reseñas">
       <div className="container stack-lg">
         <h2 className="headline" style={{ fontSize: '2rem' }}>
           Reseñas que suman confianza
@@ -892,19 +1052,24 @@ function Testimonials() {
   );
 }
 
-function CallToAction({ onReserveClick, locationAddress }) {
+function CallToAction({ onReserveClick, locationAddress, businessHours, whatsappPhone }) {
   const mapQuery = locationAddress || `${SALON_LOCATION.latitude},${SALON_LOCATION.longitude}`;
   const mapEmbedUrl = `https://maps.google.com/maps?q=${encodeURIComponent(mapQuery)}&z=16&output=embed`;
   const mapsLink = `https://maps.google.com/?q=${encodeURIComponent(mapQuery)}`;
+  const whatsappDigits = String(whatsappPhone || '').replace(/\D/g, '');
+  const whatsappPrefill = 'Hola. Quería realizar la siguiente consulta: ';
+  const whatsappLink = whatsappDigits
+    ? `https://wa.me/${whatsappDigits}?text=${encodeURIComponent(whatsappPrefill)}`
+    : null;
 
   return (
-    <section className="section" id="contacto">
+    <section className="section landing-section" id="contacto">
       <div className="container">
         <div className="cta-card map-card">
           <div className="cta-map-info">
             <h2 className="headline cta-map-heading">Conocé nuestra ubicación y horarios</h2>
             <p className="cta-map-description">{locationAddress || SALON_LOCATION.address}</p>
-            <p className="cta-map-schedule">{SALON_LOCATION.schedule}</p>
+            <p className="cta-map-schedule">{businessHours || SALON_LOCATION.schedule}</p>
           </div>
           <div className="cta-map-container">
             <iframe
@@ -923,6 +1088,22 @@ function CallToAction({ onReserveClick, locationAddress }) {
             <button type="button" className="button cta-map-button" onClick={onReserveClick}>
               Reservar turno
             </button>
+            {whatsappLink && (
+              <a
+                className="button cta-map-button cta-map-button-whatsapp"
+                href={whatsappLink}
+                target="_blank"
+                rel="noopener noreferrer"
+              >
+                <svg width="18" height="18" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                  <path
+                    fill="currentColor"
+                    d="M20.52 3.48A11.86 11.86 0 0 0 12.07 0C5.5 0 .14 5.35.14 11.92c0 2.1.55 4.16 1.6 5.98L0 24l6.27-1.64a11.86 11.86 0 0 0 5.78 1.48h.01c6.57 0 11.92-5.35 11.92-11.92 0-3.18-1.24-6.17-3.46-8.44Zm-8.45 18.35h-.01a9.87 9.87 0 0 1-5.03-1.38l-.36-.21-3.72.97 1-3.63-.24-.37a9.87 9.87 0 0 1-1.53-5.29c0-5.45 4.44-9.88 9.9-9.88a9.8 9.8 0 0 1 7 2.9 9.8 9.8 0 0 1 2.9 7 9.9 9.9 0 0 1-9.9 9.89Zm5.42-7.43c-.3-.15-1.77-.87-2.04-.97-.27-.1-.46-.15-.66.15-.2.3-.76.97-.93 1.17-.17.2-.35.22-.65.07-.3-.15-1.25-.46-2.38-1.46a8.9 8.9 0 0 1-1.64-2.03c-.17-.3-.02-.47.13-.62.13-.13.3-.35.45-.52.15-.17.2-.3.3-.5.1-.2.05-.37-.02-.52-.08-.15-.66-1.6-.9-2.18-.24-.58-.49-.5-.66-.5h-.56c-.2 0-.52.07-.8.37-.27.3-1.04 1.02-1.04 2.49s1.07 2.88 1.22 3.08c.15.2 2.11 3.23 5.1 4.53.71.31 1.27.5 1.7.65.71.23 1.35.2 1.86.12.57-.08 1.77-.72 2.02-1.42.25-.7.25-1.3.17-1.42-.07-.12-.27-.2-.57-.35Z"
+                  />
+                </svg>
+                Contactar
+              </a>
+            )}
           </div>
         </div>
       </div>
@@ -984,6 +1165,23 @@ function BookingFlow({
   const [canScrollServiceRight, setCanScrollServiceRight] = useState(false);
   const [canScrollWeekLeft, setCanScrollWeekLeft] = useState(false);
   const [canScrollWeekRight, setCanScrollWeekRight] = useState(false);
+
+  const selectedBarberInfo = useMemo(
+    () => barbers.find((item) => item.id === selectedBarber) ?? null,
+    [barbers, selectedBarber]
+  );
+  const visibleServices = useMemo(() => {
+    if (!selectedBarberInfo) return [];
+    return bookingServices.filter((service) => {
+      const professionals = Array.isArray(service.professionals) ? service.professionals : [];
+      if (!professionals.length) return true;
+      return professionals.some(
+        (professional) =>
+          typeof professional === 'string' &&
+          professional.trim().toLowerCase() === selectedBarberInfo.name.trim().toLowerCase()
+      );
+    });
+  }, [bookingServices, selectedBarberInfo]);
 
   const updateBarberScrollState = useCallback(() => {
     const container = barberListRef.current;
@@ -1081,7 +1279,7 @@ function BookingFlow({
     setSlotsError(null);
     setSelectedSlot(null);
 
-    const service = bookingServices.find((item) => item.id === selectedService);
+    const service = visibleServices.find((item) => item.id === selectedService);
     const durationMinutes = service?.durationMinutes ?? '';
     const params = new URLSearchParams({
       date: selectedDay,
@@ -1121,7 +1319,7 @@ function BookingFlow({
       });
 
     return () => controller.abort();
-  }, [selectedBarber, selectedDay, selectedService, bookingServices]);
+  }, [selectedBarber, selectedDay, selectedService, visibleServices]);
 
   useEffect(() => {
     const container = barberListRef.current;
@@ -1428,7 +1626,7 @@ function BookingFlow({
   }, [barbers, updateBarberScrollState]);
 
   useEffect(() => {
-    if (!bookingServices?.length) {
+    if (!visibleServices?.length) {
       setSelectedService(null);
       return;
     }
@@ -1436,10 +1634,10 @@ function BookingFlow({
       if (!prev) {
         return prev;
       }
-      if (bookingServices.some((item) => item.id === prev)) {
+      if (visibleServices.some((item) => item.id === prev)) {
         return prev;
       }
-      return bookingServices[0].id;
+      return visibleServices[0].id;
     });
 
     if (typeof window !== 'undefined') {
@@ -1447,15 +1645,15 @@ function BookingFlow({
     } else {
       updateServiceScrollState();
     }
-  }, [bookingServices, updateServiceScrollState]);
+  }, [visibleServices, updateServiceScrollState]);
 
   const handleProceedToPayment = async () => {
     if (!selectedBarber || !selectedService || !selectedDay || !selectedSlot) {
       setBookingError('Completá los pasos anteriores para confirmar el turno.');
       return;
     }
-    const barber = barbers.find((info) => info.id === selectedBarber) ?? null;
-    const service = bookingServices.find((info) => info.id === selectedService) ?? null;
+    const barber = selectedBarberInfo;
+    const service = visibleServices.find((info) => info.id === selectedService) ?? null;
     const dayInfo = weekOptions.find((day) => day.id === selectedDay) ?? null;
 
     if (!service || !dayInfo) {
@@ -1478,6 +1676,8 @@ function BookingFlow({
             durationMinutes: service.durationMinutes || barber?.slotDurationMinutes || 45,
             clientName: customerData.name,
             contact: customerData.phone || customerData.email,
+            contactPhone: customerData.phone,
+            contactEmail: customerData.email,
             serviceId: service.id,
             service: service.name,
             serviceCategory: service.category || service.id,
@@ -1501,6 +1701,7 @@ function BookingFlow({
         },
         customer: customerData,
         booking: payload.booking,
+        reservationWindowMinutes: payload.reservationWindowMinutes ?? 60,
       });
     } catch (error) {
       console.error('[Public] Error al crear turno', error);
@@ -1511,7 +1712,7 @@ function BookingFlow({
   };
 
   const hasBarbers = Array.isArray(barbers) && barbers.length > 0;
-  const hasServices = Array.isArray(bookingServices) && bookingServices.length > 0;
+  const hasServices = Array.isArray(visibleServices) && visibleServices.length > 0;
   const showCarousel = !isLoadingBarbers && hasBarbers;
 
   return (
@@ -1629,7 +1830,7 @@ function BookingFlow({
               {isLoadingServices ? (
                 <div className="booking-status">Cargando servicios...</div>
               ) : hasServices ? (
-                bookingServices.map((service) => (
+                visibleServices.map((service) => (
                   <button
                     key={service.id}
                     type="button"
@@ -1645,7 +1846,7 @@ function BookingFlow({
                 ))
               ) : (
                 <div className="booking-status is-empty">
-                  <p>Por ahora no hay servicios disponibles.</p>
+                  <p>Este profesional no tiene servicios disponibles para reserva online.</p>
                   {onRetryServices && (
                     <button type="button" className="secondary-link" onClick={onRetryServices}>
                       Reintentar
@@ -1837,14 +2038,30 @@ function BookingFlow({
   );
 }
 
-function Checkout({ data, onBack, onReturnHome }) {
-  const [method, setMethod] = useState(PAYMENT_METHODS[0].id);
-  const activeMethod = PAYMENT_METHODS.find((item) => item.id === method) ?? PAYMENT_METHODS[0];
+function Checkout({ data, onBack, onReturnHome, branding }) {
+  const paymentMethods = useMemo(
+    () => [
+      {
+        id: 'transferencia',
+        label: 'Transferencia',
+        detailsList: buildTransferDetails(branding),
+        details: 'Una vez realizada la transferencia, enviar el comprobante por whatsapp.',
+      },
+    ],
+    [branding]
+  );
+  const [method, setMethod] = useState(paymentMethods[0].id);
+  const activeMethod = paymentMethods.find((item) => item.id === method) ?? paymentMethods[0];
   const paymentListRef = useRef(null);
   const [canScrollPaymentLeft, setCanScrollPaymentLeft] = useState(false);
   const [canScrollPaymentRight, setCanScrollPaymentRight] = useState(false);
   const [isPaying, setIsPaying] = useState(false);
   const [paymentError, setPaymentError] = useState(null);
+  const reservationWindowMinutes = Number(data?.reservationWindowMinutes) || 60;
+  const reservationWindowLabel =
+    reservationWindowMinutes % 60 === 0
+      ? `${reservationWindowMinutes / 60} hora${reservationWindowMinutes / 60 === 1 ? '' : 's'}`
+      : `${reservationWindowMinutes} minutos`;
 
   const updatePaymentScrollState = useCallback(() => {
     const container = paymentListRef.current;
@@ -1921,53 +2138,28 @@ function Checkout({ data, onBack, onReturnHome }) {
     }
   };
 
-  const parsePriceValue = (value) => {
-    if (typeof value === 'number') return value;
-    if (!value) return 0;
-    const normalized = String(value).replace(/[^\d,.-]/g, '').replace(/\./g, '').replace(',', '.');
-    const parsed = Number(normalized);
-    return Number.isNaN(parsed) ? 0 : parsed;
-  };
-
   const handlePay = async () => {
     if (!data?.service) return;
     setPaymentError(null);
     setIsPaying(true);
 
     try {
-      const unitPrice =
-        typeof data.service.priceValue === 'number'
-          ? data.service.priceValue
-          : parsePriceValue(data.service.price);
-      const payload = {
-        title: data.service.name || 'Turno',
-        unitPrice,
-        quantity: 1,
-        bookingId: data?.booking?.id,
-        customer: {
-          name: data?.customer?.name,
-          email: data?.customer?.email,
-          phone: data?.customer?.phone,
-        },
-      };
+      const whatsappDigits = String(branding?.whatsappPhone || '').replace(/\D/g, '');
+      if (!whatsappDigits) {
+        throw new Error('Falta configurar el WhatsApp de contacto del comercio.');
+      }
 
-      const response = await fetch(`${API_BASE_URL}/public/payments/mercadopago`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
-      });
-      const result = await response.json().catch(() => ({}));
-      if (!response.ok) {
-        throw new Error(result?.message || 'No pudimos iniciar el pago.');
-      }
-      if (result?.initPoint) {
-        window.location.href = result.initPoint;
-        return;
-      }
-      throw new Error('No pudimos obtener el enlace de pago.');
+      const prefillMessage =
+        `Hola. Te envío el comprobante de transferencia de mi turno.\n` +
+        `Servicio: ${data?.service?.name || 'Turno'}\n` +
+        `Fecha y hora: ${data?.schedule?.weekday || ''} ${data?.schedule?.label || ''} ${data?.schedule?.slot || ''}\n` +
+        `Cliente: ${data?.customer?.name || ''}`;
+
+      const whatsappLink = `https://wa.me/${whatsappDigits}?text=${encodeURIComponent(prefillMessage)}`;
+      window.open(whatsappLink, '_blank', 'noopener,noreferrer');
     } catch (error) {
-      console.error('[Public] Error al iniciar pago', error);
-      setPaymentError(error.message || 'No pudimos iniciar el pago.');
+      console.error('[Public] Error al abrir WhatsApp', error);
+      setPaymentError(error.message || 'No pudimos abrir WhatsApp.');
     } finally {
       setIsPaying(false);
     }
@@ -2025,6 +2217,19 @@ function Checkout({ data, onBack, onReturnHome }) {
         </section>
         <section className="checkout-card">
           <h2>Método de pago</h2>
+          <div className="booking-alert">
+            <p>
+              Importante: este horario queda reservado por {reservationWindowLabel} desde ahora.
+            </p>
+            <p>
+              Tu turno quedó solicitado y pendiente de confirmación. Para confirmarlo, realizá la
+              transferencia y enviá el comprobante.
+            </p>
+            <p>
+              Cuando validemos el pago, te enviaremos la confirmación por WhatsApp o email. Si no
+              recibís ese aviso, o no lo ves en spam, el turno todavía no está confirmado.
+            </p>
+          </div>
           <div className="payment-method-carousel">
             <button
               type="button"
@@ -2036,7 +2241,7 @@ function Checkout({ data, onBack, onReturnHome }) {
               <span aria-hidden>‹</span>
             </button>
             <div className="payment-method-list" role="tablist" ref={paymentListRef}>
-              {PAYMENT_METHODS.map((item) => (
+              {paymentMethods.map((item) => (
                 <button
                   key={item.id}
                   type="button"
@@ -2046,7 +2251,17 @@ function Checkout({ data, onBack, onReturnHome }) {
                 >
                   <div>
                     <h3>{item.label}</h3>
-                    <p>{item.description}</p>
+                    {item.detailsList?.length ? (
+                      <p className="payment-method-transfer-lines">
+                        {item.detailsList.map((line) => (
+                          <span key={line.label}>
+                            <strong>{line.label}:</strong> {line.value}
+                          </span>
+                        ))}
+                      </p>
+                    ) : (
+                      <p>Completá los datos de transferencia desde el panel admin.</p>
+                    )}
                   </div>
                 </button>
               ))}
@@ -2071,7 +2286,7 @@ function Checkout({ data, onBack, onReturnHome }) {
               onClick={handlePay}
               disabled={isPaying}
             >
-              {isPaying ? 'Redirigiendo...' : 'Pagar'}
+              {isPaying ? 'Abriendo WhatsApp...' : 'Enviar comprobante'}
             </button>
             {paymentError ? <p className="form-error">{paymentError}</p> : null}
           </div>
@@ -2108,7 +2323,16 @@ function App() {
   const [view, setView] = useState('home');
   const [checkoutData, setCheckoutData] = useState(null);
   const [branding, setBranding] = useState(null);
-  const [theme, setTheme] = useState(DEFAULT_BRANDING.themePreference);
+  const [theme, setTheme] = useState(() => {
+    if (typeof window === 'undefined') {
+      return DEFAULT_BRANDING.themePreference;
+    }
+    const storedTheme = window.localStorage.getItem(PUBLIC_THEME_STORAGE_KEY);
+    if (storedTheme === 'dark' || storedTheme === 'light') {
+      return storedTheme;
+    }
+    return DEFAULT_BRANDING.themePreference;
+  });
   const isFlow = view === 'booking' || view === 'checkout';
   const isHomeView = view === 'home';
   const [showFloatingCTA, setShowFloatingCTA] = useState(false);
@@ -2123,14 +2347,11 @@ function App() {
   const footerLogoUrl = branding?.footerLogoUrl || DEFAULT_BRANDING.footerLogoUrl;
   const heroImageUrl = branding?.heroImageUrl || DEFAULT_BRANDING.heroImageUrl;
   const locationAddress = branding?.locationAddress || DEFAULT_BRANDING.locationAddress || SALON_LOCATION.address;
+  const businessHours = branding?.businessHours || DEFAULT_BRANDING.businessHours || SALON_LOCATION.schedule;
+  const whatsappPhone = branding?.whatsappPhone || DEFAULT_BRANDING.whatsappPhone || '';
 
   useEffect(() => {
     applyBrandingVariables(branding || DEFAULT_BRANDING);
-  }, [branding]);
-
-  useEffect(() => {
-    const preferred = branding?.themePreference || DEFAULT_BRANDING.themePreference;
-    setTheme((current) => (current === preferred ? current : preferred));
   }, [branding]);
 
   useEffect(() => {
@@ -2268,6 +2489,13 @@ function App() {
   }, [theme, branding]);
 
   useEffect(() => {
+    if (typeof window === 'undefined') {
+      return;
+    }
+    window.localStorage.setItem(PUBLIC_THEME_STORAGE_KEY, theme);
+  }, [theme]);
+
+  useEffect(() => {
     if (typeof document === 'undefined') {
       return;
     }
@@ -2336,6 +2564,10 @@ function App() {
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
+  const handleToggleTheme = () => {
+    setTheme((current) => (current === 'dark' ? 'light' : 'dark'));
+  };
+
   return (
     <div className="main-shell">
       <Navbar
@@ -2343,6 +2575,8 @@ function App() {
         onNavigateHome={handleNavigateHome}
         isBooking={isFlow}
         logoUrl={navbarLogoUrl}
+        theme={theme}
+        onToggleTheme={handleToggleTheme}
       />
       <main className={`main-content${isHomeView && showFloatingCTA ? ' has-floating-cta' : ''}`}>
         {view === 'booking' ? (
@@ -2359,7 +2593,12 @@ function App() {
             onRetryServices={handleReloadServices}
           />
         ) : view === 'checkout' ? (
-          <Checkout data={checkoutData} onBack={handleBackToBooking} onReturnHome={handleNavigateHome} />
+          <Checkout
+            data={checkoutData}
+            onBack={handleBackToBooking}
+            onReturnHome={handleNavigateHome}
+            branding={branding}
+          />
         ) : (
           <>
             <Hero
@@ -2367,10 +2606,15 @@ function App() {
               reserveButtonRef={heroReserveButtonRef}
               heroImageUrl={heroImageUrl}
             />
-            <Services onReserveClick={handleReserveClick} />
+            <Services branding={branding} />
             <HowItWorks />
             <Testimonials />
-            <CallToAction onReserveClick={handleReserveClick} locationAddress={locationAddress} />
+            <CallToAction
+              onReserveClick={handleReserveClick}
+              locationAddress={locationAddress}
+              businessHours={businessHours}
+              whatsappPhone={whatsappPhone}
+            />
           </>
         )}
       </main>

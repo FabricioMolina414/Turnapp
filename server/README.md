@@ -17,6 +17,7 @@ Duplicá `.env.example` a `.env`. Variables disponibles:
 - `PORT` — Puerto de escucha (por defecto 4000).
 - `JWT_SECRET` — Clave usada para firmar los tokens JWT.
 - `JWT_EXPIRES_IN` *(opcional)* — Tiempo de expiración, por defecto `1d`.
+- `GOOGLE_CLIENT_ID` *(opcional)* — Client ID de Google OAuth para login en el panel admin.
 
 ## Roles y autenticación
 
@@ -25,9 +26,12 @@ Duplicá `.env.example` a `.env`. Variables disponibles:
 
 > Reiniciá el servidor cada vez que modifiques las credenciales semilla. El superadmin puede crear más usuarios admin mediante `POST /api/superadmin/admins` (y desde la UI en la sección “Administradores”). Las contraseñas se almacenan en memoria usando `bcryptjs`; al reiniciar el servidor se resetean los datos.
 
+Si se usa `POST /api/auth/google`, los usuarios nuevos quedan con rol `staff` por defecto y luego un superadmin puede promoverlos.
+
 ## Endpoints disponibles
 
 - `POST /api/auth/login`
+- `POST /api/auth/google`
 - `GET /api/auth/me`
 - `GET /api/appointments/week`
 - `GET /api/appointments/day/:isoDate`
@@ -38,16 +42,23 @@ Duplicá `.env.example` a `.env`. Variables disponibles:
 - `DELETE /api/staff/:id`
 - `GET /api/superadmin/admins`
 - `POST /api/superadmin/admins`
+- `PATCH /api/superadmin/admins/:id`
+- `PATCH /api/superadmin/admins/:id/password`
+- `DELETE /api/superadmin/admins/:id`
 - `GET /api/public/staff`
 - `GET /api/public/services`
 
 > Todas las rutas (excepto login) requieren token Bearer. Usá el token devuelto en `/api/auth/login`.
 
-### Persistencia local
+### Persistencia en base de datos
 
-La lista de profesionales se guarda en `src/data/staff.json`. Cada vez que agregás o eliminás un staff desde la API o el panel, el archivo se actualiza, por lo que los datos sobreviven a los reinicios del servidor.
+Staff y turnos se guardan en Postgres usando Prisma (tablas `AppStaff` y `AppBooking`).
 
-Los turnos se guardan en `src/data/bookings.json`. Para compartir la estructura sin datos sensibles, usá `src/data/bookings.example.json` como referencia.
+Si actualizaste el proyecto, corré la migración pendiente:
+
+```bash
+npm run prisma:migrate
+```
 
 ## Estructura de carpetas
 

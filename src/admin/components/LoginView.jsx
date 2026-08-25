@@ -1,14 +1,18 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useAuth } from '../context/AuthContext.jsx';
 import brandLogo from '../../assets/Logo_AC-removebg-preview.png';
 
 export default function LoginView() {
-  const { login, status, error } = useAuth();
+  const { login, loginWithGoogle, status, error } = useAuth();
   const [formState, setFormState] = useState({
     identifier: '',
     password: '',
   });
   const [formError, setFormError] = useState(null);
+  const googleButtonRef = useRef(null);
+  const googleClientId = import.meta.env.VITE_GOOGLE_CLIENT_ID;
+  const isGoogleEnabled = Boolean(googleClientId);
+  const [isGoogleReady, setIsGoogleReady] = useState(false);
 
   const isSubmitting = status === 'loading';
 
@@ -35,6 +39,63 @@ export default function LoginView() {
       setFormError(submitError.message || 'No se pudo iniciar sesión');
     }
   };
+
+  useEffect(() => {
+    if (!isGoogleEnabled) return;
+
+    if (window.google?.accounts?.id) {
+      setIsGoogleReady(true);
+      return;
+    }
+
+    const existingScript = document.querySelector('script[data-google-identity]');
+    if (existingScript) {
+      existingScript.addEventListener('load', () => setIsGoogleReady(true));
+      return;
+    }
+
+    const script = document.createElement('script');
+    script.src = 'https://accounts.google.com/gsi/client';
+    script.async = true;
+    script.defer = true;
+    script.dataset.googleIdentity = 'true';
+    script.onload = () => setIsGoogleReady(true);
+    document.body.appendChild(script);
+
+    return () => {
+      script.onload = null;
+    };
+  }, [isGoogleEnabled]);
+
+  useEffect(() => {
+    if (!isGoogleReady || !googleButtonRef.current || !isGoogleEnabled) return;
+
+    googleButtonRef.current.innerHTML = '';
+
+    window.google.accounts.id.initialize({
+      client_id: googleClientId,
+      callback: async (response) => {
+        setFormError(null);
+        if (!response?.credential) {
+          setFormError('No se pudo obtener la credencial de Google.');
+          return;
+        }
+        try {
+          await loginWithGoogle({ idToken: response.credential });
+        } catch (submitError) {
+          setFormError(submitError.message || 'No se pudo iniciar sesión con Google');
+        }
+      },
+    });
+
+    window.google.accounts.id.renderButton(googleButtonRef.current, {
+      theme: 'outline',
+      size: 'large',
+      text: 'continue_with',
+      shape: 'pill',
+      width: 320,
+    });
+  }, [isGoogleReady, isGoogleEnabled, googleClientId, loginWithGoogle]);
 
   return (
     <div className="login-shell">
@@ -79,6 +140,18 @@ export default function LoginView() {
         <button type="submit" className="primary-button" disabled={isSubmitting}>
           {isSubmitting ? 'Ingresando...' : 'Ingresar'}
         </button>
+
+        {isGoogleEnabled && (
+          <>
+            <div className="login-divider">
+              <span>o</span>
+            </div>
+            <div
+              className={`google-login ${isSubmitting ? 'is-disabled' : ''}`}
+              ref={googleButtonRef}
+            />
+          </>
+        )}
       </form>
     </div>
   );

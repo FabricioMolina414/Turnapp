@@ -1,7 +1,7 @@
 const { verifyToken } = require('../utils/jwt');
 const { findUserById, sanitizeUser } = require('../data/users');
 
-function authenticate(req, res, next) {
+async function authenticate(req, res, next) {
   const authHeader = req.headers.authorization;
   if (!authHeader || !authHeader.startsWith('Bearer ')) {
     return res.status(401).json({ message: 'Token no provisto' });
@@ -11,7 +11,7 @@ function authenticate(req, res, next) {
 
   try {
     const payload = verifyToken(token);
-    const user = findUserById(payload.sub);
+    const user = await findUserById(payload.sub);
 
     if (!user) {
       return res.status(401).json({ message: 'Usuario inválido' });

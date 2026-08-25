@@ -2,7 +2,12 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import brandLogo from '../assets/Logo_AC-removebg-preview.png';
 import { useAuth } from './context/AuthContext.jsx';
 import LoginView from './components/LoginView.jsx';
-import { fetchWeeklySchedule, fetchMonthSummary, cancelAppointment } from './api/appointments.js';
+import {
+  fetchWeeklySchedule,
+  fetchMonthSummary,
+  cancelAppointment,
+  confirmAppointment,
+} from './api/appointments.js';
 import { fetchMonthlyMetrics } from './api/metrics.js';
 import { fetchServices, createService, updateService, deleteService } from './api/services.js';
 import { fetchBranding, saveBranding } from './api/branding.js';
@@ -13,7 +18,13 @@ import {
   updateStaffSchedule,
   updateStaffMember,
 } from './api/staff.js';
-import { fetchAdmins, createAdmin, updateAdminRole } from './api/superadmin.js';
+import {
+  fetchAdmins,
+  createAdmin,
+  updateAdminRole,
+  resetAdminPassword,
+  deleteAdmin,
+} from './api/superadmin.js';
 
 const DEFAULT_STAFF_AVATAR =
   'data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128"><rect width="128" height="128" rx="24" fill="%23f1f5f9"/><circle cx="64" cy="52" r="26" fill="%2394a3b8"/><path d="M24 112c0-22 18-40 40-40s40 18 40 40" fill="%23cbd5f5"/></svg>';
@@ -23,7 +34,8 @@ const NAV_ITEMS = [
   { id: 'turnos', label: 'Turnos', roles: ['admin', 'staff', 'superadmin'] },
   { id: 'services', label: 'Mis servicios', roles: ['admin', 'superadmin'] },
   { id: 'branding', label: 'Mi comercio', roles: ['admin', 'superadmin'] },
-  { id: 'admins', label: 'Administradores', roles: ['superadmin'] },
+  { id: 'customization', label: 'Personalización', roles: ['admin', 'superadmin'] },
+  { id: 'admins', label: 'Administradores', roles: ['admin', 'superadmin'] },
 ];
 
 const currencyFormatter = new Intl.NumberFormat('es-AR', {
@@ -45,7 +57,14 @@ const DEFAULT_BRANDING = {
   navbarLogoUrl: '',
   footerLogoUrl: '',
   locationAddress: '',
+  businessHours: '',
+  whatsappPhone: '',
+  instagramUrl: '',
+  transferAlias: '',
+  transferAccountHolder: '',
+  transferDestination: '',
   highlightMessage: 'Agendá tu turno en línea y recibí la confirmación al instante.',
+  workGallery: [],
 };
 
 const parseHexColor = (value) => {
@@ -386,6 +405,37 @@ function ThemeToggle({ theme, onToggle, disabled = false }) {
   );
 }
 
+function DismissibleAlert({ type = 'error', message, onDismiss, children }) {
+  const [isHidden, setIsHidden] = useState(false);
+
+  useEffect(() => {
+    setIsHidden(false);
+  }, [message]);
+
+  if (!message || isHidden) {
+    return null;
+  }
+
+  const className = type === 'success' ? 'alert-success' : 'alert-error';
+
+  const handleClose = () => {
+    setIsHidden(true);
+    onDismiss?.();
+  };
+
+  return (
+    <div className={className}>
+      <p>{message}</p>
+      <div className="alert-actions">
+        {children}
+        <button type="button" className="alert-close" onClick={handleClose} aria-label="Cerrar aviso">
+          ×
+        </button>
+      </div>
+    </div>
+  );
+}
+
 const EMPTY_SERVICE_FORM = {
   id: null,
   name: '',
@@ -400,6 +450,67 @@ const EMPTY_SERVICE_FORM = {
 function capitalize(value) {
   if (!value) return '';
   return value.charAt(0).toUpperCase() + value.slice(1);
+}
+
+function getPaymentStatusPresentation(status) {
+  const normalized = (status || '').toString().toLowerCase();
+  switch (normalized) {
+    case 'approved':
+      return { label: 'Aprobado', className: 'status-confirmado' };
+    case 'pending':
+      return { label: 'Pendiente', className: 'status-pendiente' };
+    case 'rejected':
+      return { label: 'Rechazado', className: 'status-sin-estado' };
+    default:
+      return { label: 'Sin estado', className: 'status-sin-estado' };
+  }
+}
+
+function getAppointmentStatusPresentation(status) {
+  const normalized = (status || '').toString().toLowerCase();
+  switch (normalized) {
+    case 'confirmed':
+    case 'confirmado':
+      return { label: 'Confirmado', className: 'status-confirmado' };
+    case 'pending_confirmation':
+    case 'pendiente':
+      return { label: 'Pendiente de confirmacion', className: 'status-pendiente' };
+    case 'expired':
+    case 'vencido':
+      return { label: 'Vencido', className: 'status-sin-estado' };
+    case 'cancelled':
+    case 'cancelado':
+    case 'cancelada':
+      return { label: 'Cancelado', className: 'status-cancelled' };
+    case 'completed':
+    case 'completado':
+      return { label: 'Completado', className: 'status-confirmado' };
+    default:
+      return {
+        label: status ? capitalize(String(status).replace(/_/g, ' ')) : 'Sin estado',
+        className: 'status-sin-estado',
+      };
+  }
+}
+
+function normalizePhoneForWhatsApp(value) {
+  const digits = String(value || '').replace(/\D/g, '');
+  if (!digits) return '';
+  return digits.startsWith('54') ? digits : `54${digits}`;
+}
+
+function buildWhatsAppConfirmationText(appointment) {
+  return [
+    `Hola ${appointment?.clientName || ''}. Tu turno ya esta confirmado.`,
+    `Servicio: ${appointment?.service || 'Turno'}`,
+    `Profesional: ${appointment?.stylist || ''}`,
+    `Fecha: ${appointment?.date || ''}`,
+    `Horario: ${appointment?.startTime || ''} hs`,
+    appointment?.serviceCategory ? `Categoria: ${appointment.serviceCategory}` : null,
+    'Te esperamos. Si necesitas reprogramarlo, avisanos con anticipacion.',
+  ]
+    .filter(Boolean)
+    .join('\n');
 }
 
 function getStartOfDay(date = new Date()) {
@@ -419,7 +530,7 @@ function buildWeeklySchedule(scheduleMap, referenceDate = new Date()) {
 
     const metrics = appointments.reduce(
       (acc, appointment) => {
-        const statusKey = appointment.status ?? 'otros';
+        const statusKey = (appointment.status || 'otros').toString().toLowerCase();
         return {
           ...acc,
           total: acc.total + 1,
@@ -442,11 +553,68 @@ function buildWeeklySchedule(scheduleMap, referenceDate = new Date()) {
   });
 }
 
-function Sidebar({ navItems, activeItem, onSelect, user, onLogout }) {
+function Sidebar({
+  navItems,
+  activeItem,
+  onSelect,
+  user,
+  onLogout,
+  logoUrl,
+  canUpdateTheme = false,
+  theme = 'light',
+  onToggleTheme,
+  isThemeSaving = false,
+}) {
+  const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
+
+  useEffect(() => {
+    if (typeof document === 'undefined') return;
+
+    if (!isMobileMenuOpen) {
+      document.body.style.removeProperty('overflow');
+      return;
+    }
+
+    document.body.style.overflow = 'hidden';
+    return () => {
+      document.body.style.removeProperty('overflow');
+    };
+  }, [isMobileMenuOpen]);
+
+  useEffect(() => {
+    const handleResize = () => {
+      if (window.innerWidth > 720) {
+        setIsMobileMenuOpen(false);
+      }
+    };
+
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, []);
+
+  const handleSelectItem = (itemId) => {
+    onSelect(itemId);
+    setIsMobileMenuOpen(false);
+  };
+
+  const handleLogout = () => {
+    setIsMobileMenuOpen(false);
+    onLogout();
+  };
+
   return (
-    <aside className="admin-sidebar">
+    <aside className={`admin-sidebar${isMobileMenuOpen ? ' is-mobile-menu-open' : ''}`}>
       <div className="sidebar-header">
-        <img src={brandLogo} alt="Turnapp" />
+        <button
+          type="button"
+          className="mobile-menu-toggle"
+          aria-label={isMobileMenuOpen ? 'Cerrar menú' : 'Abrir menú'}
+          aria-expanded={isMobileMenuOpen}
+          onClick={() => setIsMobileMenuOpen((prev) => !prev)}
+        >
+          <span aria-hidden>{isMobileMenuOpen ? '✕' : '☰'}</span>
+        </button>
+        <img src={logoUrl || brandLogo} alt="Turnapp" />
         <div>
           <strong>Turnapp</strong>
           <span>Panel de administración</span>
@@ -461,7 +629,7 @@ function Sidebar({ navItems, activeItem, onSelect, user, onLogout }) {
               key={item.id}
               type="button"
               className={isActive ? 'is-active' : ''}
-              onClick={() => onSelect(item.id)}
+              onClick={() => handleSelectItem(item.id)}
             >
               {item.label}
             </button>
@@ -474,11 +642,60 @@ function Sidebar({ navItems, activeItem, onSelect, user, onLogout }) {
           <strong>{user?.name || user?.email}</strong>
           <span>{capitalize(user?.role)}</span>
         </div>
-        <button type="button" className="secondary-button" onClick={onLogout}>
+        <button type="button" className="secondary-button" onClick={handleLogout}>
           Cerrar sesión
         </button>
       </div>
 
+      <button
+        type="button"
+        className={`mobile-menu-backdrop${isMobileMenuOpen ? ' is-visible' : ''}`}
+        onClick={() => setIsMobileMenuOpen(false)}
+        aria-label="Cerrar menú"
+      />
+
+      <div className={`mobile-menu-drawer${isMobileMenuOpen ? ' is-open' : ''}`}>
+        <div className="mobile-menu-header">
+          <img className="mobile-menu-logo" src={logoUrl || brandLogo} alt="Logo navbar" />
+          <button
+            type="button"
+            className="secondary-button mobile-menu-close"
+            onClick={() => setIsMobileMenuOpen(false)}
+            aria-label="Cerrar menú"
+          >
+            <span aria-hidden>✕</span>
+          </button>
+        </div>
+        <nav className="admin-nav mobile-menu-nav">
+          {navItems.map((item) => {
+            const isActive = activeItem === item.id;
+            return (
+              <button
+                key={`mobile-${item.id}`}
+                type="button"
+                className={isActive ? 'is-active' : ''}
+                onClick={() => handleSelectItem(item.id)}
+              >
+                {item.label}
+              </button>
+            );
+          })}
+        </nav>
+        <div className="mobile-menu-user">
+          <div className="user-chip">
+            {canUpdateTheme && (
+              <ThemeToggle theme={theme} onToggle={onToggleTheme} disabled={isThemeSaving} />
+            )}
+            <div>
+              <strong>{user?.name || user?.email}</strong>
+              <span>{capitalize(user?.role)}</span>
+            </div>
+          </div>
+          <button type="button" className="secondary-button" onClick={handleLogout}>
+            Cerrar sesión
+          </button>
+        </div>
+      </div>
     </aside>
   );
 }
@@ -546,7 +763,7 @@ function DashboardView({
               <span className="week-day-date">{day.shortLabel}</span>
               <div className="week-day-metrics">
                 <span>{day.metrics.total || 0} turnos</span>
-                <span>{day.metrics.pendiente || 0} pendientes</span>
+                <span>{day.metrics.pending_confirmation || day.metrics.pendiente || 0} pendientes</span>
               </div>
               <strong>{currencyFormatter.format(day.metrics.revenue || 0)}</strong>
             </button>
@@ -568,7 +785,9 @@ function AgendaPanel({
   selectedDay,
   selectedAppointmentId,
   onSelectAppointment,
+  onConfirmAppointment,
   onCancelAppointment,
+  confirmingAppointmentId,
   cancellingAppointmentId,
 }) {
   return (
@@ -599,10 +818,15 @@ function AgendaPanel({
                   <span className="appointment-client">{appointment.clientName}</span>
                   <span className="appointment-meta">
                     {appointment.stylist} · {appointment.paymentMethod}
+                    {appointment.paymentStatus
+                      ? ` · ${getPaymentStatusPresentation(appointment.paymentStatus).label}`
+                      : ''}
                   </span>
                 </div>
-                <span className={`status-pill status-${appointment.status ?? 'sin-estado'}`}>
-                  {appointment.status ? capitalize(appointment.status) : 'Sin estado'}
+                <span
+                  className={`status-pill ${getAppointmentStatusPresentation(appointment.status).className}`}
+                >
+                  {getAppointmentStatusPresentation(appointment.status).label}
                 </span>
               </button>
             ))
@@ -616,7 +840,9 @@ function AgendaPanel({
         <div className="agenda-details">
           <AppointmentDetails
             appointment={selectedDay.appointments.find((item) => item.id === selectedAppointmentId)}
+            onConfirm={onConfirmAppointment}
             onCancel={onCancelAppointment}
+            confirmingId={confirmingAppointmentId}
             cancellingId={cancellingAppointmentId}
           />
         </div>
@@ -635,7 +861,9 @@ function AppointmentsView({
   staff,
   staffFilter,
   onChangeStaffFilter,
+  onConfirmAppointment,
   onCancelAppointment,
+  confirmingAppointmentId,
   cancellingAppointmentId,
 }) {
   return (
@@ -683,7 +911,9 @@ function AppointmentsView({
           selectedDay={selectedDay}
           selectedAppointmentId={selectedAppointmentId}
           onSelectAppointment={onSelectAppointment}
+          onConfirmAppointment={onConfirmAppointment}
           onCancelAppointment={onCancelAppointment}
+          confirmingAppointmentId={confirmingAppointmentId}
           cancellingAppointmentId={cancellingAppointmentId}
         />
       </section>
@@ -691,7 +921,7 @@ function AppointmentsView({
   );
 }
 
-function AppointmentDetails({ appointment, onCancel, cancellingId }) {
+function AppointmentDetails({ appointment, onConfirm, onCancel, confirmingId, cancellingId }) {
   if (!appointment) {
     return (
       <div className="appointment-empty">
@@ -701,6 +931,25 @@ function AppointmentDetails({ appointment, onCancel, cancellingId }) {
   }
 
   const isCancelling = cancellingId === appointment.id;
+  const isConfirming = confirmingId === appointment.id;
+  const paymentStatus = appointment?.paymentStatus
+    ? getPaymentStatusPresentation(appointment.paymentStatus)
+    : null;
+  const appointmentStatus = getAppointmentStatusPresentation(appointment.status);
+  const isPendingConfirmation = appointment.status === 'pending_confirmation';
+  const whatsappPhone = normalizePhoneForWhatsApp(appointment.contactPhone || appointment.contact);
+  const whatsappMessage = buildWhatsAppConfirmationText(appointment);
+
+  const handleCopyWhatsAppText = async () => {
+    if (!navigator?.clipboard) return;
+    await navigator.clipboard.writeText(whatsappMessage);
+  };
+
+  const handleOpenWhatsApp = () => {
+    if (!whatsappPhone) return;
+    const url = `https://wa.me/${whatsappPhone}?text=${encodeURIComponent(whatsappMessage)}`;
+    window.open(url, '_blank', 'noopener,noreferrer');
+  };
 
   return (
     <div className="appointment-details">
@@ -717,8 +966,12 @@ function AppointmentDetails({ appointment, onCancel, cancellingId }) {
           <dd>{appointment.clientName}</dd>
         </div>
         <div>
-          <dt>Contacto</dt>
-          <dd>{appointment.contact}</dd>
+          <dt>WhatsApp</dt>
+          <dd>{appointment.contactPhone || appointment.contact || 'Sin telefono'}</dd>
+        </div>
+        <div>
+          <dt>Email</dt>
+          <dd>{appointment.contactEmail || 'Sin email'}</dd>
         </div>
         <div>
           <dt>Servicio</dt>
@@ -732,22 +985,52 @@ function AppointmentDetails({ appointment, onCancel, cancellingId }) {
           <dt>Método de pago</dt>
           <dd>{appointment.paymentMethod}</dd>
         </div>
+        {paymentStatus && (
+          <div>
+            <dt>Pago</dt>
+            <dd className={`status-pill ${paymentStatus.className}`}>{paymentStatus.label}</dd>
+          </div>
+        )}
         <div>
           <dt>Estado</dt>
-          <dd className={`status-pill status-${appointment.status ?? 'sin-estado'}`}>
-            {appointment.status ? capitalize(appointment.status) : 'Sin estado'}
-          </dd>
+          <dd className={`status-pill ${appointmentStatus.className}`}>{appointmentStatus.label}</dd>
         </div>
         <div>
           <dt>Importe</dt>
           <dd>{currencyFormatter.format(appointment.price || 0)}</dd>
         </div>
+        {appointment.expiresAt && (
+          <div>
+            <dt>Reserva hasta</dt>
+            <dd>{new Date(appointment.expiresAt).toLocaleString('es-AR')}</dd>
+          </div>
+        )}
       </dl>
 
       <section>
         <h4>Notas</h4>
         <p>{appointment.notes || 'Sin notas adicionales.'}</p>
       </section>
+      {onConfirm && isPendingConfirmation && (
+        <button
+          type="button"
+          className="button"
+          onClick={() => onConfirm(appointment.id)}
+          disabled={isConfirming}
+        >
+          {isConfirming ? 'Confirmando...' : 'Confirmar turno'}
+        </button>
+      )}
+      {appointment.status === 'confirmed' && whatsappPhone && (
+        <>
+          <button type="button" className="secondary-button" onClick={handleCopyWhatsAppText}>
+            Copiar texto de confirmacion
+          </button>
+          <button type="button" className="secondary-button" onClick={handleOpenWhatsApp}>
+            Abrir WhatsApp
+          </button>
+        </>
+      )}
       {onCancel && appointment.status !== 'cancelled' && (
         <button
           type="button"
@@ -1469,23 +1752,27 @@ function ServicesView({
               </div>
             </div>
 
-            {(formError || formSuccess) && (
-              <div className={formError ? 'alert-error' : 'alert-success'}>
-                <p>{formError || formSuccess}</p>
-                {formError && (
-                  <button
-                    type="button"
-                    className="secondary-button"
-                    onClick={() => {
-                      setFormError(null);
-                      onDismissStaffError?.();
-                    }}
-                  >
-                    Intentar de nuevo
-                  </button>
-                )}
-              </div>
-            )}
+            <DismissibleAlert
+              type={formError ? 'error' : 'success'}
+              message={formError || formSuccess}
+              onDismiss={() => {
+                setFormError(null);
+                setFormSuccess(null);
+              }}
+            >
+              {formError && (
+                <button
+                  type="button"
+                  className="secondary-button"
+                  onClick={() => {
+                    setFormError(null);
+                    onDismissStaffError?.();
+                  }}
+                >
+                  Intentar de nuevo
+                </button>
+              )}
+            </DismissibleAlert>
 
             <div className="form-actions">
               <button
@@ -1499,14 +1786,17 @@ function ServicesView({
           </form>
         )}
 
-        {staffActionError && (!isStaffEditorActive || !formError) && (
-          <div className="alert-error">
-            <p>{staffActionError}</p>
+        {!isStaffEditorActive || !formError ? (
+          <DismissibleAlert
+            type="error"
+            message={staffActionError}
+            onDismiss={onDismissStaffError}
+          >
             <button type="button" className="secondary-button" onClick={onDismissStaffError}>
               Entendido
             </button>
-          </div>
-        )}
+          </DismissibleAlert>
+        ) : null}
 
         {staff.length ? (
           <div className="staff-grid">
@@ -1735,7 +2025,11 @@ function ServicesView({
                 Cancelar
               </button>
             </div>
-            {serviceActionError && <p className="form-error">{serviceActionError}</p>}
+            <DismissibleAlert
+              type="error"
+              message={serviceActionError}
+              onDismiss={onDismissStaffError}
+            />
           </form>
         ) : (
           <div className="form-actions is-left">
@@ -1834,10 +2128,47 @@ function ServicesView({
   );
 }
 
-function BrandingView({ branding, isLoading, isSaving, error, onSave }) {
+function BrandingView({ branding, isLoading, isSaving, error, onSave, mode = 'all' }) {
   const [formState, setFormState] = useState({ ...DEFAULT_BRANDING, ...(branding ?? {}) });
   const [formError, setFormError] = useState(null);
   const [formSuccess, setFormSuccess] = useState(null);
+  const [selectedWorkCard, setSelectedWorkCard] = useState(1);
+  const showCommerce = mode === 'all' || mode === 'commerce';
+  const showIdentity = mode === 'all' || mode === 'identity';
+
+  const normalizeWorkGallery = useCallback((gallery) => {
+    if (!Array.isArray(gallery)) return [];
+    return gallery
+      .map((item, index) => {
+        const cardNumber = Number.parseInt(item?.cardNumber, 10) || index + 1;
+        const title = typeof item?.title === 'string' ? item.title : '';
+        const description = typeof item?.description === 'string' ? item.description : '';
+        return {
+          cardNumber,
+          imageUrl: typeof item?.imageUrl === 'string' ? item.imageUrl : '',
+          title,
+          description,
+        };
+      })
+      .sort((a, b) => a.cardNumber - b.cardNumber)
+      .map((item, index) => ({
+        cardNumber: index + 1,
+        imageUrl: item.imageUrl || '',
+        title: item.title || '',
+        description: item.description || '',
+      }));
+  }, []);
+
+  const workGallery = useMemo(
+    () => normalizeWorkGallery(formState.workGallery),
+    [formState.workGallery, normalizeWorkGallery]
+  );
+
+  const workCardNumbers = useMemo(() => workGallery.map((item) => item.cardNumber), [workGallery]);
+  const selectedWorkCardData = useMemo(
+    () => workGallery.find((item) => item.cardNumber === selectedWorkCard) ?? null,
+    [workGallery, selectedWorkCard]
+  );
   const locationAddress = formState.locationAddress?.trim();
   const mapEmbedUrl = locationAddress
     ? `https://maps.google.com/maps?q=${encodeURIComponent(locationAddress)}&z=16&output=embed`
@@ -1848,6 +2179,15 @@ function BrandingView({ branding, isLoading, isSaving, error, onSave }) {
     setFormError(null);
     setFormSuccess(null);
   }, [branding]);
+
+  useEffect(() => {
+    if (!workCardNumbers.length) {
+      setSelectedWorkCard(1);
+      return;
+    }
+
+    setSelectedWorkCard((current) => (workCardNumbers.includes(current) ? current : workCardNumbers[0]));
+  }, [workCardNumbers]);
 
   const handleColorChange = (event) => {
     const { name, value } = event.target;
@@ -1877,6 +2217,87 @@ function BrandingView({ branding, isLoading, isSaving, error, onSave }) {
     }
   };
 
+  const handleAddWorkCard = () => {
+    setFormState((prev) => {
+      const currentGallery = normalizeWorkGallery(prev.workGallery);
+      const nextCardNumber = currentGallery.length + 1;
+      const nextGallery = [
+        ...currentGallery,
+        { cardNumber: nextCardNumber, imageUrl: '', title: '', description: '' },
+      ];
+      return { ...prev, workGallery: nextGallery };
+    });
+    setSelectedWorkCard((prev) => Math.max(prev, workGallery.length + 1));
+    setFormError(null);
+    setFormSuccess(null);
+  };
+
+  const handleWorkCardImageChange = async (event) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    if (file.size > 1200000) {
+      setFormError('La imagen es muy pesada. Usá un archivo menor a 1.2MB.');
+      return;
+    }
+
+    try {
+      const dataUrl = await readFileAsDataUrl(file);
+      setFormState((prev) => {
+        const currentGallery = normalizeWorkGallery(prev.workGallery);
+        const hasSelected = currentGallery.some((item) => item.cardNumber === selectedWorkCard);
+        const baseGallery = hasSelected
+          ? currentGallery
+          : [{ cardNumber: selectedWorkCard, imageUrl: '', title: '', description: '' }, ...currentGallery];
+
+        const nextGallery = baseGallery
+          .map((item) =>
+            item.cardNumber === selectedWorkCard ? { ...item, imageUrl: dataUrl } : item
+          )
+          .sort((a, b) => a.cardNumber - b.cardNumber);
+
+        return { ...prev, workGallery: nextGallery };
+      });
+      setFormError(null);
+      setFormSuccess(null);
+    } catch (readError) {
+      setFormError('No pudimos cargar la imagen seleccionada.');
+    } finally {
+      event.target.value = '';
+    }
+  };
+
+  const handleWorkCardTextChange = (field) => (event) => {
+    const value = event.target.value;
+    setFormState((prev) => {
+      const currentGallery = normalizeWorkGallery(prev.workGallery);
+      const hasSelected = currentGallery.some((item) => item.cardNumber === selectedWorkCard);
+      const baseGallery = hasSelected
+        ? currentGallery
+        : [{ cardNumber: selectedWorkCard, imageUrl: '', title: '', description: '' }, ...currentGallery];
+
+      const nextGallery = baseGallery
+        .map((item) =>
+          item.cardNumber === selectedWorkCard ? { ...item, [field]: value } : item
+        )
+        .sort((a, b) => a.cardNumber - b.cardNumber);
+
+      return { ...prev, workGallery: nextGallery };
+    });
+    setFormError(null);
+    setFormSuccess(null);
+  };
+
+  const handleDeleteSelectedWorkCard = () => {
+    setFormState((prev) => {
+      const currentGallery = normalizeWorkGallery(prev.workGallery);
+      const nextGallery = currentGallery.filter((item) => item.cardNumber !== selectedWorkCard);
+      return { ...prev, workGallery: nextGallery };
+    });
+    setFormError(null);
+    setFormSuccess(null);
+  };
+
   const handleReset = () => {
     setFormState({ ...DEFAULT_BRANDING, ...(branding ?? {}) });
     setFormError(null);
@@ -1889,7 +2310,10 @@ function BrandingView({ branding, isLoading, isSaving, error, onSave }) {
     setFormSuccess(null);
 
     try {
-      await onSave(formState);
+      await onSave({
+        ...formState,
+        workGallery: normalizeWorkGallery(formState.workGallery),
+      });
       setFormSuccess('Personalización guardada.');
     } catch (submitError) {
       setFormError(submitError.message || 'No se pudo guardar la personalización.');
@@ -1901,174 +2325,419 @@ function BrandingView({ branding, isLoading, isSaving, error, onSave }) {
 
   return (
     <div className="branding-view">
-      <section className="card" style={{ marginBottom: '1.5rem' }}>
-        <header className="card-header">
-          <div>
-            <h2>Ubicación de mi comercio</h2>
-            <p>Definí la dirección que se verá en el sitio público.</p>
-          </div>
-        </header>
-
-        {isLoading ? (
-          <p className="empty-state">Cargando ubicación...</p>
-        ) : (
-          <div className="branding-form">
-            <div className="form-field">
-              <label htmlFor="location-address">Dirección</label>
-              <input
-                type="text"
-                id="location-address"
-                name="locationAddress"
-                value={formState.locationAddress}
-                onChange={handleTextChange}
-                placeholder="Ej. El Chaco 106, Córdoba Capital"
-              />
+      {showCommerce && (
+        <section className="card" style={{ marginBottom: '1.5rem' }}>
+          <header className="card-header">
+            <div>
+              <h2>Ubicación de mi comercio</h2>
+              <p>Completá dirección, horario y contacto para usarlo luego en el sitio público.</p>
             </div>
-            {mapEmbedUrl ? (
-              <div style={{ marginTop: '1rem', borderRadius: '16px', overflow: 'hidden' }}>
-                <iframe
-                  title="Mapa de ubicación"
-                  src={mapEmbedUrl}
-                  loading="lazy"
-                  allowFullScreen
-                  referrerPolicy="no-referrer-when-downgrade"
-                  style={{ width: '100%', minHeight: '220px', border: '0' }}
+          </header>
+
+          {isLoading ? (
+            <p className="empty-state">Cargando ubicación...</p>
+          ) : (
+            <form className="branding-form banking-form" onSubmit={handleSubmit}>
+              {(error || formError) && <p className="form-helper">{error || formError}</p>}
+              {formSuccess && <p className="form-helper">{formSuccess}</p>}
+              <div className="location-grid">
+                <div className="location-column">
+                  <div className="form-field">
+                    <label htmlFor="location-address">Dirección</label>
+                    <input
+                      type="text"
+                      id="location-address"
+                      name="locationAddress"
+                      value={formState.locationAddress}
+                      onChange={handleTextChange}
+                      placeholder="Ej. El Chaco 106, Córdoba Capital"
+                    />
+                  </div>
+                  {mapEmbedUrl ? (
+                    <div className="location-map">
+                      <iframe
+                        title="Mapa de ubicación"
+                        src={mapEmbedUrl}
+                        loading="lazy"
+                        allowFullScreen
+                        referrerPolicy="no-referrer-when-downgrade"
+                        style={{ width: '100%', minHeight: '220px', border: '0' }}
+                      />
+                    </div>
+                  ) : (
+                    <p className="form-helper">Ingresá una dirección para ver la vista previa del mapa.</p>
+                  )}
+                </div>
+
+                <div className="location-column">
+                  <div className="form-field">
+                    <label htmlFor="business-hours">Horario de atención</label>
+                    <textarea
+                      id="business-hours"
+                      name="businessHours"
+                      rows={9}
+                      value={formState.businessHours || ''}
+                      onChange={handleTextChange}
+                      placeholder={'Ej.\nLunes a Viernes · 09:00 a 13:00 y 16:00 a 20:00\nSábado · 09:00 a 14:00\nDomingo · Cerrado'}
+                    />
+                    <p className="form-helper">Podés separar por líneas para cada día o bloque horario.</p>
+                  </div>
+                </div>
+
+                <div className="location-column">
+                  <div className="form-field">
+                    <label htmlFor="whatsapp-phone">Contacto (WhatsApp)</label>
+                    <input
+                      type="text"
+                      id="whatsapp-phone"
+                      name="whatsappPhone"
+                      value={formState.whatsappPhone || ''}
+                      onChange={handleTextChange}
+                      placeholder="Ej. +54 9 351 123 4567"
+                    />
+                  </div>
+                  <div className="form-field">
+                    <label htmlFor="instagram-url">Instagram (usuario)</label>
+                    <input
+                      type="text"
+                      id="instagram-url"
+                      name="instagramUrl"
+                      value={formState.instagramUrl || ''}
+                      onChange={handleTextChange}
+                      placeholder="@tu_cuenta o tu_cuenta"
+                    />
+                    <p className="form-helper">Se completará automáticamente como https://instagram.com/usuario.</p>
+                  </div>
+                </div>
+              </div>
+              <div className="form-actions">
+                <button type="button" className="secondary-button" onClick={handleReset} disabled={isSaving}>
+                  Deshacer cambios
+                </button>
+                <button type="submit" className="primary-button" disabled={isSaving}>
+                  {isSaving ? 'Guardando...' : 'Guardar datos de comercio'}
+                </button>
+              </div>
+            </form>
+          )}
+        </section>
+      )}
+
+      {showCommerce && (
+        <section className="card" style={{ marginBottom: '1.5rem' }}>
+          <header className="card-header">
+            <div>
+              <h2>Datos de la cuenta bancaria</h2>
+              <p>Estos datos se muestran al cliente al momento de confirmar el pago por transferencia.</p>
+            </div>
+          </header>
+
+          {isLoading ? (
+            <p className="empty-state">Cargando datos bancarios...</p>
+          ) : (
+            <form className="branding-form" onSubmit={handleSubmit}>
+              {(error || formError) && <p className="form-helper">{error || formError}</p>}
+              {formSuccess && <p className="form-helper">{formSuccess}</p>}
+
+              <div className="form-field">
+                <label htmlFor="transfer-alias">Alias para transferencia</label>
+                <input
+                  type="text"
+                  id="transfer-alias"
+                  name="transferAlias"
+                  value={formState.transferAlias || ''}
+                  onChange={handleTextChange}
+                  placeholder="Ej. peluqueria.turnapp"
                 />
               </div>
+              <div className="form-field">
+                <label htmlFor="transfer-holder">Titular de la cuenta</label>
+                <input
+                  type="text"
+                  id="transfer-holder"
+                  name="transferAccountHolder"
+                  value={formState.transferAccountHolder || ''}
+                  onChange={handleTextChange}
+                  placeholder="Ej. Ana Rodríguez"
+                />
+              </div>
+              <div className="form-field">
+                <label htmlFor="transfer-destination">Cuenta de destino</label>
+                <input
+                  type="text"
+                  id="transfer-destination"
+                  name="transferDestination"
+                  value={formState.transferDestination || ''}
+                  onChange={handleTextChange}
+                  placeholder="Ej. Cuenta bancaria / Naranja X / billetera virtual"
+                />
+              </div>
+
+              <div className="form-actions">
+                <button type="button" className="secondary-button" onClick={handleReset} disabled={isSaving}>
+                  Deshacer cambios
+                </button>
+                <button type="submit" className="primary-button" disabled={isSaving}>
+                  {isSaving ? 'Guardando...' : 'Guardar datos bancarios'}
+                </button>
+              </div>
+            </form>
+          )}
+        </section>
+      )}
+
+      {showIdentity && (
+        <>
+          <section className="card" style={{ marginBottom: '1.5rem' }}>
+            <header className="card-header">
+              <div>
+                <h2>Identidad visual</h2>
+                <p>Actualizá colores, logos e imágenes visibles en tu sitio público.</p>
+              </div>
+            </header>
+
+            {isLoading ? (
+              <p className="empty-state">Cargando personalización...</p>
             ) : (
-              <p className="form-helper">Ingresá una dirección para ver la vista previa del mapa.</p>
+              <form className="branding-form" onSubmit={handleSubmit}>
+                {(error || formError) && <p className="form-helper">{error || formError}</p>}
+                {formSuccess && <p className="form-helper">{formSuccess}</p>}
+
+                <div className="branding-row branding-row-two">
+                  <div className="form-field">
+                    <label htmlFor="primary-color">Color principal</label>
+                    <input
+                      type="color"
+                      id="primary-color"
+                      name="primaryColor"
+                      value={formState.primaryColor}
+                      onChange={handleColorChange}
+                    />
+                  </div>
+
+                  <div className="form-field">
+                    <label htmlFor="secondary-color">Color de acento</label>
+                    <input
+                      type="color"
+                      id="secondary-color"
+                      name="accentColor"
+                      value={formState.accentColor}
+                      onChange={handleColorChange}
+                    />
+                  </div>
+                </div>
+
+                <div className="branding-row branding-row-three">
+                  <div className="form-field">
+                    <label htmlFor="hero-image">Imagen del hero</label>
+                    <div className="logo-preview">
+                      {formState.heroImageUrl ? (
+                        <img className="branding-asset-image" src={formState.heroImageUrl} alt="Hero actual" />
+                      ) : (
+                        <img className="branding-asset-image" src={logoNavbarSrc} alt="Hero actual" />
+                      )}
+                      <input
+                        type="file"
+                        id="hero-image"
+                        name="hero-image"
+                        accept="image/png,image/jpeg"
+                        onChange={handleImageChange('heroImageUrl')}
+                      />
+                    </div>
+                    <p className="form-helper">Formatos JPG o PNG · Recomendado 1440 × 900 px.</p>
+                  </div>
+
+                  <div className="form-field">
+                    <label htmlFor="navbar-logo">Logo navbar</label>
+                    <div className="logo-preview">
+                      <img className="branding-asset-image" src={logoNavbarSrc} alt="Logo actual" />
+                      <input
+                        type="file"
+                        id="navbar-logo"
+                        name="navbar-logo"
+                        accept="image/png,image/svg+xml"
+                        onChange={handleImageChange('navbarLogoUrl')}
+                      />
+                    </div>
+                  </div>
+
+                  <div className="form-field">
+                    <label htmlFor="footer-logo">Logo footer</label>
+                    <div className="logo-preview">
+                      <img className="branding-asset-image" src={logoFooterSrc} alt="Logo actual" />
+                      <input
+                        type="file"
+                        id="footer-logo"
+                        name="footer-logo"
+                        accept="image/png,image/svg+xml"
+                        onChange={handleImageChange('footerLogoUrl')}
+                      />
+                    </div>
+                  </div>
+                </div>
+                <div className="form-actions">
+                  <button type="button" className="secondary-button" onClick={handleReset} disabled={isSaving}>
+                    Deshacer cambios
+                  </button>
+                  <button type="submit" className="primary-button" disabled={isSaving}>
+                    {isSaving ? 'Guardando...' : 'Guardar personalización'}
+                  </button>
+                </div>
+              </form>
             )}
-          </div>
-        )}
-      </section>
+          </section>
 
-      <section className="card">
-        <header className="card-header">
-          <div>
-            <h2>Identidad visual</h2>
-            <p>Actualizá colores, logos e imágenes visibles en tu sitio público.</p>
-          </div>
-          <button
-            type="button"
-            className="secondary-button"
-            onClick={() => window.open('/', '_blank', 'noopener')}
-          >
-            Vista previa
-          </button>
-        </header>
-
-        {isLoading ? (
-          <p className="empty-state">Cargando personalización...</p>
-        ) : (
-          <form className="branding-form" onSubmit={handleSubmit}>
-            {(error || formError) && <p className="form-helper">{error || formError}</p>}
-            {formSuccess && <p className="form-helper">{formSuccess}</p>}
-
-            <div className="form-field">
-              <label htmlFor="primary-color">Color principal</label>
-              <input
-                type="color"
-                id="primary-color"
-                name="primaryColor"
-                value={formState.primaryColor}
-                onChange={handleColorChange}
-              />
-            </div>
-
-            <div className="form-field">
-              <label htmlFor="secondary-color">Color de acento</label>
-              <input
-                type="color"
-                id="secondary-color"
-                name="accentColor"
-                value={formState.accentColor}
-                onChange={handleColorChange}
-              />
-            </div>
-
-            <div className="form-field">
-              <label htmlFor="hero-image">Imagen del hero</label>
-              <div className="logo-preview">
-                {formState.heroImageUrl ? (
-                  <img src={formState.heroImageUrl} alt="Hero actual" />
-                ) : (
-                  <img src={logoNavbarSrc} alt="Hero actual" />
-                )}
-                <input
-                  type="file"
-                  id="hero-image"
-                  name="hero-image"
-                  accept="image/png,image/jpeg"
-                  onChange={handleImageChange('heroImageUrl')}
-                />
+          <section className="card">
+            <header className="card-header">
+              <div>
+                <h2>Trabajos realizados</h2>
+                <p>
+                  Agregá tarjetas y cargá la imagen de cada una para mostrarlas en el sitio público.
+                </p>
               </div>
-              <p className="form-helper">Formatos JPG o PNG · Recomendado 1440 × 900 px.</p>
-            </div>
+            </header>
 
-            <div className="form-field">
-              <label htmlFor="navbar-logo">Logo navbar</label>
-              <div className="logo-preview">
-                <img src={logoNavbarSrc} alt="Logo actual" />
-                <input
-                  type="file"
-                  id="navbar-logo"
-                  name="navbar-logo"
-                  accept="image/png,image/svg+xml"
-                  onChange={handleImageChange('navbarLogoUrl')}
-                />
-              </div>
-            </div>
+            {isLoading ? (
+              <p className="empty-state">Cargando trabajos...</p>
+            ) : (
+              <form className="branding-form" onSubmit={handleSubmit}>
+                {(error || formError) && <p className="form-helper">{error || formError}</p>}
+                {formSuccess && <p className="form-helper">{formSuccess}</p>}
 
-            <div className="form-field">
-              <label htmlFor="footer-logo">Logo footer</label>
-              <div className="logo-preview">
-                <img src={logoFooterSrc} alt="Logo actual" />
-                <input
-                  type="file"
-                  id="footer-logo"
-                  name="footer-logo"
-                  accept="image/png,image/svg+xml"
-                  onChange={handleImageChange('footerLogoUrl')}
-                />
-              </div>
-            </div>
+                <div className="works-layout">
+                  <div className="works-form">
+                    <div className="works-actions">
+                      <button
+                        type="button"
+                        className="secondary-button"
+                        onClick={handleAddWorkCard}
+                      >
+                        Agregar tarjeta
+                      </button>
+                      <button
+                        type="button"
+                        className="danger-button"
+                        onClick={handleDeleteSelectedWorkCard}
+                        disabled={!workCardNumbers.length}
+                      >
+                        Eliminar tarjeta
+                      </button>
+                    </div>
 
-            <div className="form-field">
-              <label htmlFor="custom-copy">Mensaje destacado</label>
-              <textarea
-                id="custom-copy"
-                name="highlightMessage"
-                rows={3}
-                value={formState.highlightMessage}
-                onChange={handleTextChange}
-              />
-            </div>
+                    <div className="form-field">
+                      <label htmlFor="work-card-number">Número de tarjeta</label>
+                      <select
+                        id="work-card-number"
+                        value={selectedWorkCard}
+                        onChange={(event) => setSelectedWorkCard(Number(event.target.value))}
+                        disabled={!workCardNumbers.length}
+                      >
+                        {workCardNumbers.length ? (
+                          workCardNumbers.map((cardNumber) => (
+                            <option key={cardNumber} value={cardNumber}>
+                              Tarjeta {cardNumber}
+                            </option>
+                          ))
+                        ) : (
+                          <option value={1}>Sin tarjetas</option>
+                        )}
+                      </select>
+                    </div>
 
-            <div className="form-actions">
-              <button type="button" className="secondary-button" onClick={handleReset} disabled={isSaving}>
-                Deshacer cambios
-              </button>
-              <button type="submit" className="primary-button" disabled={isSaving}>
-                {isSaving ? 'Guardando...' : 'Guardar personalización'}
-              </button>
-            </div>
-          </form>
-        )}
-      </section>
+                    <div className="form-field">
+                      <label htmlFor="work-card-title">Título de tarjeta</label>
+                      <input
+                        type="text"
+                        id="work-card-title"
+                        value={selectedWorkCardData?.title || ''}
+                        onChange={handleWorkCardTextChange('title')}
+                        placeholder="Ej. Balayage rubio ceniza"
+                        disabled={!workCardNumbers.length}
+                      />
+                    </div>
+
+                    <div className="form-field">
+                      <label htmlFor="work-card-description">Descripción de tarjeta</label>
+                      <textarea
+                        id="work-card-description"
+                        rows={3}
+                        value={selectedWorkCardData?.description || ''}
+                        onChange={handleWorkCardTextChange('description')}
+                        placeholder="Ej. Coloración + nutrición profunda en una sesión."
+                        disabled={!workCardNumbers.length}
+                      />
+                    </div>
+
+                    <div className="form-field">
+                      <label htmlFor="work-card-image">Imagen de la tarjeta seleccionada</label>
+                      <input
+                        type="file"
+                        id="work-card-image"
+                        accept="image/png,image/jpeg"
+                        onChange={handleWorkCardImageChange}
+                        disabled={!workCardNumbers.length}
+                      />
+                    </div>
+                  </div>
+
+                  <div className="works-preview-column">
+                    {selectedWorkCardData ? (
+                      <article key={selectedWorkCardData.cardNumber} className="work-card-preview">
+                        <header>Tarjeta {selectedWorkCardData.cardNumber}</header>
+                        {selectedWorkCardData.imageUrl ? (
+                          <img
+                            src={selectedWorkCardData.imageUrl}
+                            alt={selectedWorkCardData.title || `Trabajo ${selectedWorkCardData.cardNumber}`}
+                          />
+                        ) : (
+                          <p>Sin imagen cargada</p>
+                        )}
+                        <h3>{selectedWorkCardData.title || 'Título pendiente'}</h3>
+                        <p>
+                          {selectedWorkCardData.description ||
+                            'Cargá una descripción para mostrarla en la tarjeta del sitio público.'}
+                        </p>
+                      </article>
+                    ) : (
+                      <p className="empty-state">Todavía no agregaste tarjetas.</p>
+                    )}
+                  </div>
+                </div>
+
+                <div className="form-actions">
+                  <button type="button" className="secondary-button" onClick={handleReset} disabled={isSaving}>
+                    Deshacer cambios
+                  </button>
+                  <button type="submit" className="primary-button" disabled={isSaving}>
+                    {isSaving ? 'Guardando...' : 'Guardar trabajos'}
+                  </button>
+                </div>
+              </form>
+            )}
+          </section>
+        </>
+      )}
     </div>
   );
 }
 
 function SuperadminView({
+  currentUserId,
+  canCreateUsers,
+  canChangeRoles,
   admins,
   isLoading,
   error,
   onReload,
   onCreateAdmin,
   onUpdateAdminRole,
+  onResetAdminPassword,
+  onDeleteAdmin,
   isSubmitting,
   updatingAdminId,
-  roleUpdateError,
+  resettingPasswordId,
+  deletingAdminId,
+  actionError,
 }) {
   const [formState, setFormState] = useState({
     name: '',
@@ -2079,6 +2748,10 @@ function SuperadminView({
   });
   const [formError, setFormError] = useState(null);
   const [formSuccess, setFormSuccess] = useState(null);
+  const [pendingDeleteAdmin, setPendingDeleteAdmin] = useState(null);
+  const [passwordModalUser, setPasswordModalUser] = useState(null);
+  const [passwordForm, setPasswordForm] = useState({ password: '', confirmPassword: '' });
+  const [passwordFormError, setPasswordFormError] = useState(null);
   const roleLabels = {
     admin: 'Admin',
     staff: 'Staff',
@@ -2126,97 +2799,149 @@ function SuperadminView({
     }
   };
 
+  const handlePasswordFieldChange = (event) => {
+    const { name, value } = event.target;
+    setPasswordForm((prev) => ({ ...prev, [name]: value }));
+    setPasswordFormError(null);
+  };
+
+  const handleOpenPasswordModal = (admin) => {
+    setPasswordModalUser(admin);
+    setPasswordForm({ password: '', confirmPassword: '' });
+    setPasswordFormError(null);
+  };
+
+  const handleSubmitPasswordReset = async (event) => {
+    event.preventDefault();
+    if (!passwordModalUser) return;
+
+    const nextPassword = passwordForm.password.trim();
+    const nextPasswordConfirm = passwordForm.confirmPassword.trim();
+    if (nextPassword.length < 6) {
+      setPasswordFormError('La contraseña debe tener al menos 6 caracteres.');
+      return;
+    }
+    if (nextPassword !== nextPasswordConfirm) {
+      setPasswordFormError('Las contraseñas no coinciden.');
+      return;
+    }
+
+    try {
+      await onResetAdminPassword({ userId: passwordModalUser.id, password: nextPassword });
+      setPasswordModalUser(null);
+      setPasswordForm({ password: '', confirmPassword: '' });
+      setPasswordFormError(null);
+    } catch (error) {
+      setPasswordFormError(error.message || 'No se pudo restablecer la contraseña.');
+    }
+  };
+
+  const handleConfirmDeleteAdmin = async () => {
+    if (!pendingDeleteAdmin) return;
+    try {
+      await onDeleteAdmin(pendingDeleteAdmin.id);
+      setPendingDeleteAdmin(null);
+    } catch (error) {
+      // Se muestra en actionError, mantenemos el modal abierto para reintentar o cancelar.
+    }
+  };
+
   return (
     <div className="admins-view">
-      <section className="card">
-        <header className="card-header">
-          <div>
-            <h2>Crear nuevo usuario</h2>
-            <p>Invitá a tu equipo otorgándoles acceso al panel admin.</p>
-          </div>
-        </header>
+      {canCreateUsers && (
+        <section className="card">
+          <header className="card-header">
+            <div>
+              <h2>Crear nuevo usuario</h2>
+              <p>Invitá a tu equipo otorgándoles acceso al panel admin.</p>
+            </div>
+          </header>
 
-        <form className="admins-form" onSubmit={handleSubmit}>
-          <div className="form-grid">
-            <div className="form-field">
-              <label htmlFor="admin-name">Nombre</label>
-              <input
-                id="admin-name"
-                name="name"
-                placeholder="Ej. Ana Rodríguez"
-                value={formState.name}
-                onChange={handleChange}
-                disabled={isSubmitting}
-              />
+          <form className="admins-form" onSubmit={handleSubmit}>
+            <div className="form-grid">
+              <div className="form-field">
+                <label htmlFor="admin-name">Nombre</label>
+                <input
+                  id="admin-name"
+                  name="name"
+                  placeholder="Ej. Ana Rodríguez"
+                  value={formState.name}
+                  onChange={handleChange}
+                  disabled={isSubmitting}
+                />
+              </div>
+              <div className="form-field">
+                <label htmlFor="admin-email">Email</label>
+                <input
+                  id="admin-email"
+                  name="email"
+                  type="email"
+                  placeholder="ana@peluqueria.com"
+                  value={formState.email}
+                  onChange={handleChange}
+                  disabled={isSubmitting}
+                />
+              </div>
+              <div className="form-field">
+                <label htmlFor="admin-username">Usuario (opcional)</label>
+                <input
+                  id="admin-username"
+                  name="username"
+                  placeholder="ana"
+                  value={formState.username}
+                  onChange={handleChange}
+                  disabled={isSubmitting}
+                />
+                <p className="form-helper">
+                  Si lo dejás vacío se tomará la parte previa al @ del email.
+                </p>
+              </div>
+              <div className="form-field">
+                <label htmlFor="admin-role">Rol</label>
+                <select
+                  id="admin-role"
+                  name="role"
+                  value={formState.role}
+                  onChange={handleChange}
+                  disabled={isSubmitting}
+                >
+                  <option value="admin">Admin</option>
+                  <option value="staff">Staff</option>
+                </select>
+                <p className="form-helper">Definí el acceso con el rol correcto.</p>
+              </div>
+              <div className="form-field">
+                <label htmlFor="admin-password">Contraseña temporal</label>
+                <input
+                  id="admin-password"
+                  name="password"
+                  type="password"
+                  placeholder="••••••••"
+                  value={formState.password}
+                  onChange={handleChange}
+                  disabled={isSubmitting}
+                />
+                <p className="form-helper">El usuario podrá cambiarla luego.</p>
+              </div>
             </div>
-            <div className="form-field">
-              <label htmlFor="admin-email">Email</label>
-              <input
-                id="admin-email"
-                name="email"
-                type="email"
-                placeholder="ana@peluqueria.com"
-                value={formState.email}
-                onChange={handleChange}
-                disabled={isSubmitting}
-              />
-            </div>
-            <div className="form-field">
-              <label htmlFor="admin-username">Usuario (opcional)</label>
-              <input
-                id="admin-username"
-                name="username"
-                placeholder="ana"
-                value={formState.username}
-                onChange={handleChange}
-                disabled={isSubmitting}
-              />
-              <p className="form-helper">
-                Si lo dejás vacío se tomará la parte previa al @ del email.
-              </p>
-            </div>
-            <div className="form-field">
-              <label htmlFor="admin-role">Rol</label>
-              <select
-                id="admin-role"
-                name="role"
-                value={formState.role}
-                onChange={handleChange}
-                disabled={isSubmitting}
-              >
-                <option value="admin">Admin</option>
-                <option value="staff">Staff</option>
-              </select>
-              <p className="form-helper">Definí el acceso con el rol correcto.</p>
-            </div>
-            <div className="form-field">
-              <label htmlFor="admin-password">Contraseña temporal</label>
-              <input
-                id="admin-password"
-                name="password"
-                type="password"
-                placeholder="••••••••"
-                value={formState.password}
-                onChange={handleChange}
-                disabled={isSubmitting}
-              />
-              <p className="form-helper">El usuario podrá cambiarla luego.</p>
-            </div>
-          </div>
 
-          {(formError || formSuccess) && (
-            <div className={formError ? 'alert-error' : 'alert-success'}>
-              <p>{formError || formSuccess}</p>
-            </div>
-          )}
+            <DismissibleAlert
+              type={formError ? 'error' : 'success'}
+              message={formError || formSuccess}
+              onDismiss={() => {
+                setFormError(null);
+                setFormSuccess(null);
+              }}
+            />
 
-          <div className="form-actions">
-            <button type="submit" className="primary-button" disabled={isSubmitting}>
-              {isSubmitting ? 'Creando...' : 'Crear usuario'}
-            </button>
-          </div>
-        </form>
-      </section>
+            <div className="form-actions">
+              <button type="submit" className="primary-button" disabled={isSubmitting}>
+                {isSubmitting ? 'Creando...' : 'Crear usuario'}
+              </button>
+            </div>
+          </form>
+        </section>
+      )}
 
       <section className="card">
         <header className="card-header">
@@ -2229,19 +2954,12 @@ function SuperadminView({
           </button>
         </header>
 
-        {error && (
-          <div className="alert-error">
-            <p>{error}</p>
-            <button type="button" className="secondary-button" onClick={onReload} disabled={isLoading}>
-              Reintentar
-            </button>
-          </div>
-        )}
-        {roleUpdateError && (
-          <div className="alert-error">
-            <p>{roleUpdateError}</p>
-          </div>
-        )}
+        <DismissibleAlert type="error" message={error}>
+          <button type="button" className="secondary-button" onClick={onReload} disabled={isLoading}>
+            Reintentar
+          </button>
+        </DismissibleAlert>
+        <DismissibleAlert type="error" message={actionError} />
 
         {isLoading && !admins.length ? (
           <div className="loading-state">
@@ -2277,23 +2995,41 @@ function SuperadminView({
                         })
                       : '—'}
                   </span>
-                  <div>
+                  <div className="admins-actions">
+                    {canChangeRoles && (
+                      <button
+                        type="button"
+                        className="secondary-button"
+                        onClick={() =>
+                          onUpdateAdminRole({
+                            userId: admin.id,
+                            role: admin.role === 'staff' ? 'admin' : 'staff',
+                          })
+                        }
+                        disabled={updatingAdminId === admin.id || admin.id === currentUserId}
+                      >
+                        {updatingAdminId === admin.id
+                          ? 'Actualizando...'
+                          : admin.role === 'staff'
+                          ? 'Promover a admin'
+                          : 'Pasar a staff'}
+                      </button>
+                    )}
                     <button
                       type="button"
                       className="secondary-button"
-                      onClick={() =>
-                        onUpdateAdminRole({
-                          userId: admin.id,
-                          role: admin.role === 'staff' ? 'admin' : 'staff',
-                        })
-                      }
-                      disabled={updatingAdminId === admin.id}
+                      onClick={() => handleOpenPasswordModal(admin)}
+                      disabled={resettingPasswordId === admin.id || admin.id === currentUserId}
                     >
-                      {updatingAdminId === admin.id
-                        ? 'Actualizando...'
-                        : admin.role === 'staff'
-                        ? 'Promover a admin'
-                        : 'Pasar a staff'}
+                      {resettingPasswordId === admin.id ? 'Restableciendo...' : 'Restablecer contraseña'}
+                    </button>
+                    <button
+                      type="button"
+                      className="secondary-button"
+                      onClick={() => setPendingDeleteAdmin(admin)}
+                      disabled={deletingAdminId === admin.id || admin.id === currentUserId}
+                    >
+                      {deletingAdminId === admin.id ? 'Eliminando...' : 'Eliminar usuario'}
                     </button>
                   </div>
                 </div>
@@ -2304,6 +3040,97 @@ function SuperadminView({
           </div>
         )}
       </section>
+
+      {passwordModalUser && (
+        <div className="modal-overlay" role="presentation">
+          <div className="modal-card" role="dialog" aria-modal="true" aria-labelledby="reset-password-title">
+            <h3 id="reset-password-title">Restablecer contraseña</h3>
+            <p>
+              Definí una nueva contraseña para {passwordModalUser.name || passwordModalUser.email}.
+            </p>
+            <form onSubmit={handleSubmitPasswordReset} className="admins-form">
+              <div className="form-grid">
+                <div className="form-field">
+                  <label htmlFor="reset-password">Nueva contraseña</label>
+                  <input
+                    id="reset-password"
+                    name="password"
+                    type="password"
+                    value={passwordForm.password}
+                    onChange={handlePasswordFieldChange}
+                    autoComplete="new-password"
+                    disabled={resettingPasswordId === passwordModalUser.id}
+                  />
+                </div>
+                <div className="form-field">
+                  <label htmlFor="reset-password-confirm">Repetir contraseña</label>
+                  <input
+                    id="reset-password-confirm"
+                    name="confirmPassword"
+                    type="password"
+                    value={passwordForm.confirmPassword}
+                    onChange={handlePasswordFieldChange}
+                    autoComplete="new-password"
+                    disabled={resettingPasswordId === passwordModalUser.id}
+                  />
+                </div>
+              </div>
+              <DismissibleAlert
+                type="error"
+                message={passwordFormError || actionError}
+                onDismiss={() => setPasswordFormError(null)}
+              />
+              <div className="modal-actions">
+                <button
+                  type="button"
+                  className="secondary-button"
+                  onClick={() => setPasswordModalUser(null)}
+                  disabled={resettingPasswordId === passwordModalUser.id}
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="submit"
+                  className="primary-button"
+                  disabled={resettingPasswordId === passwordModalUser.id}
+                >
+                  {resettingPasswordId === passwordModalUser.id ? 'Restableciendo...' : 'Guardar contraseña'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {pendingDeleteAdmin && (
+        <div className="modal-overlay" role="presentation">
+          <div className="modal-card modal-alert" role="dialog" aria-modal="true" aria-labelledby="delete-user-title">
+            <h3 id="delete-user-title">Eliminar usuario</h3>
+            <p>
+              La eliminación de {pendingDeleteAdmin.name || pendingDeleteAdmin.email} no puede deshacerse.
+              ¿Seguro que querés continuar?
+            </p>
+            <div className="modal-actions">
+              <button
+                type="button"
+                className="secondary-button"
+                onClick={() => setPendingDeleteAdmin(null)}
+                disabled={deletingAdminId === pendingDeleteAdmin.id}
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                className="danger-button"
+                onClick={handleConfirmDeleteAdmin}
+                disabled={deletingAdminId === pendingDeleteAdmin.id}
+              >
+                {deletingAdminId === pendingDeleteAdmin.id ? 'Eliminando...' : 'Eliminar'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -2320,12 +3147,11 @@ function DataState({ isLoading, error, onRetry }) {
 
   if (error) {
     return (
-      <div className="alert-error">
-        <p>{error}</p>
+      <DismissibleAlert type="error" message={error}>
         <button type="button" className="secondary-button" onClick={onRetry}>
           Reintentar
         </button>
-      </div>
+      </DismissibleAlert>
     );
   }
 
@@ -2365,7 +3191,9 @@ export default function App() {
   const [adminsError, setAdminsError] = useState(null);
   const [isCreatingAdmin, setIsCreatingAdmin] = useState(false);
   const [updatingAdminId, setUpdatingAdminId] = useState(null);
-  const [roleUpdateError, setRoleUpdateError] = useState(null);
+  const [resettingAdminPasswordId, setResettingAdminPasswordId] = useState(null);
+  const [deletingAdminId, setDeletingAdminId] = useState(null);
+  const [adminsActionError, setAdminsActionError] = useState(null);
   const [isStaffEditorActive, setIsStaffEditorActive] = useState(false);
   const [isCreatingStaff, setIsCreatingStaff] = useState(false);
   const [isUpdatingStaff, setIsUpdatingStaff] = useState(false);
@@ -2374,9 +3202,11 @@ export default function App() {
   const [scheduleActionError, setScheduleActionError] = useState(null);
   const [deletingStaffId, setDeletingStaffId] = useState(null);
   const [cancellingAppointmentId, setCancellingAppointmentId] = useState(null);
+  const [confirmingAppointmentId, setConfirmingAppointmentId] = useState(null);
   const [serviceActionError, setServiceActionError] = useState(null);
   const [isSavingService, setIsSavingService] = useState(false);
   const [deletingServiceId, setDeletingServiceId] = useState(null);
+  const adminSidebarLogoUrl = branding?.navbarLogoUrl || brandLogo;
 
   useEffect(() => {
     applyBrandingVariables(branding || DEFAULT_BRANDING);
@@ -2577,12 +3407,13 @@ export default function App() {
   }, [token, theme, branding, canUpdateTheme]);
 
   const isSuperadmin = userRole === 'superadmin';
+  const canManageAdminsSection = userRole === 'admin' || userRole === 'superadmin';
 
   const loadAdmins = useCallback(async () => {
-    if (!token || !isSuperadmin) return;
+    if (!token || !canManageAdminsSection) return;
     setAdminsLoading(true);
     setAdminsError(null);
-    setRoleUpdateError(null);
+    setAdminsActionError(null);
     try {
       const response = await fetchAdmins({ token });
       setAdmins(response?.admins ?? []);
@@ -2592,15 +3423,15 @@ export default function App() {
     } finally {
       setAdminsLoading(false);
     }
-  }, [token, isSuperadmin]);
+  }, [token, canManageAdminsSection]);
 
   useEffect(() => {
-    if (isSuperadmin) {
+    if (canManageAdminsSection) {
       loadAdmins();
     } else {
       setAdmins([]);
     }
-  }, [isSuperadmin, loadAdmins]);
+  }, [canManageAdminsSection, loadAdmins]);
 
   const handleCreateAdmin = useCallback(
     async ({ name, email, password, username, role }) => {
@@ -2609,7 +3440,7 @@ export default function App() {
       }
 
       setIsCreatingAdmin(true);
-      setRoleUpdateError(null);
+      setAdminsActionError(null);
       try {
         const response = await createAdmin({
           token,
@@ -2631,7 +3462,7 @@ export default function App() {
       }
 
       setUpdatingAdminId(userId);
-      setRoleUpdateError(null);
+      setAdminsActionError(null);
       try {
         const response = await updateAdminRole({
           token,
@@ -2644,13 +3475,63 @@ export default function App() {
         return response.admin;
       } catch (error) {
         const message = error.message || 'No se pudo actualizar el rol del usuario';
-        setRoleUpdateError(message);
+        setAdminsActionError(message);
         throw new Error(message);
       } finally {
         setUpdatingAdminId(null);
       }
     },
     [token, isSuperadmin]
+  );
+
+  const handleResetAdminPassword = useCallback(
+    async ({ userId, password }) => {
+      if (!token || !canManageAdminsSection) {
+        throw new Error('No tenés permisos para restablecer contraseñas');
+      }
+
+      setResettingAdminPasswordId(userId);
+      setAdminsActionError(null);
+      try {
+        const response = await resetAdminPassword({
+          token,
+          userId,
+          password,
+        });
+        setAdmins((prev) =>
+          prev.map((item) => (item.id === userId ? response.admin : item))
+        );
+      } catch (error) {
+        const message = error.message || 'No se pudo restablecer la contraseña del usuario';
+        setAdminsActionError(message);
+        throw new Error(message);
+      } finally {
+        setResettingAdminPasswordId(null);
+      }
+    },
+    [token, canManageAdminsSection]
+  );
+
+  const handleDeleteAdmin = useCallback(
+    async (userId) => {
+      if (!token || !canManageAdminsSection) {
+        throw new Error('No tenés permisos para eliminar usuarios');
+      }
+
+      setDeletingAdminId(userId);
+      setAdminsActionError(null);
+      try {
+        await deleteAdmin({ token, userId });
+        setAdmins((prev) => prev.filter((item) => item.id !== userId));
+      } catch (error) {
+        const message = error.message || 'No se pudo eliminar el usuario';
+        setAdminsActionError(message);
+        throw new Error(message);
+      } finally {
+        setDeletingAdminId(null);
+      }
+    },
+    [token, canManageAdminsSection]
   );
 
   const handleToggleStaffEditor = useCallback(() => {
@@ -2842,6 +3723,22 @@ export default function App() {
     [token, loadData]
   );
 
+  const handleConfirmAppointment = useCallback(
+    async (appointmentId) => {
+      if (!token || !appointmentId) return;
+      setConfirmingAppointmentId(appointmentId);
+      try {
+        await confirmAppointment({ token, appointmentId });
+        await loadData();
+      } catch (error) {
+        console.error('[Admin] Error al confirmar turno', error);
+      } finally {
+        setConfirmingAppointmentId(null);
+      }
+    },
+    [token, loadData]
+  );
+
   const handleDismissStaffError = useCallback(() => {
     setStaffActionError(null);
     setScheduleActionError(null);
@@ -2849,7 +3746,7 @@ export default function App() {
   }, []);
 
   const { weekConfirmedCount, weekCancelledCount, weekPaidRevenue } = useMemo(() => {
-    const paidStatuses = new Set(['confirmado', 'seña', 'pagado', 'paid']);
+    const paidStatuses = new Set(['confirmed', 'confirmado', 'seña', 'pagado', 'paid']);
     let confirmedCount = 0;
     let cancelledCount = 0;
     let paidRevenue = 0;
@@ -2857,7 +3754,7 @@ export default function App() {
     weeklySchedule.forEach((day) => {
       day.appointments.forEach((appointment) => {
         const status = (appointment.status || '').toString().toLowerCase();
-        if (status === 'confirmado') {
+        if (status === 'confirmed' || status === 'confirmado') {
           confirmedCount += 1;
         }
         if (status === 'cancelado' || status === 'cancelada' || status === 'cancelled') {
@@ -2927,6 +3824,11 @@ export default function App() {
         onSelect={setActiveSection}
         user={user}
         onLogout={logout}
+        logoUrl={adminSidebarLogoUrl}
+        canUpdateTheme={canUpdateTheme}
+        theme={theme}
+        onToggleTheme={handleToggleTheme}
+        isThemeSaving={isThemeSaving}
       />
 
       <main className="admin-main">
@@ -2994,7 +3896,9 @@ export default function App() {
                 staff={staff}
                 staffFilter={appointmentStaffFilter}
                 onChangeStaffFilter={setAppointmentStaffFilter}
+                onConfirmAppointment={canCancelAppointments ? handleConfirmAppointment : undefined}
                 onCancelAppointment={canCancelAppointments ? handleCancelAppointment : undefined}
+                confirmingAppointmentId={confirmingAppointmentId}
                 cancellingAppointmentId={cancellingAppointmentId}
               />
             )}
@@ -3032,20 +3936,39 @@ export default function App() {
                 isSaving={brandingSaving}
                 error={brandingError}
                 onSave={handleSaveBranding}
+                mode="commerce"
               />
             )}
 
-            {activeSection === 'admins' && isSuperadmin && (
+            {activeSection === 'customization' && (
+              <BrandingView
+                branding={branding}
+                isLoading={brandingLoading}
+                isSaving={brandingSaving}
+                error={brandingError}
+                onSave={handleSaveBranding}
+                mode="identity"
+              />
+            )}
+
+            {activeSection === 'admins' && canManageAdminsSection && (
               <SuperadminView
+                currentUserId={user?.id}
+                canCreateUsers={isSuperadmin}
+                canChangeRoles={isSuperadmin}
                 admins={admins}
                 isLoading={adminsLoading}
                 error={adminsError}
                 onReload={loadAdmins}
                 onCreateAdmin={handleCreateAdmin}
                 onUpdateAdminRole={handleUpdateAdminRole}
+                onResetAdminPassword={handleResetAdminPassword}
+                onDeleteAdmin={handleDeleteAdmin}
                 isSubmitting={isCreatingAdmin}
                 updatingAdminId={updatingAdminId}
-                roleUpdateError={roleUpdateError}
+                resettingPasswordId={resettingAdminPasswordId}
+                deletingAdminId={deletingAdminId}
+                actionError={adminsActionError}
               />
             )}
           </>

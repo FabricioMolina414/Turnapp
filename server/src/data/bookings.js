@@ -1,38 +1,14 @@
 const { randomUUID } = require('crypto');
-const fs = require('fs');
-const path = require('path');
+const { prisma } = require('../config/database');
 
-const DATA_FILE_PATH = path.join(__dirname, 'bookings.json');
-
-function loadBookingsFromFile() {
-  if (!fs.existsSync(DATA_FILE_PATH)) {
-    saveBookingsToFile([]);
-    return [];
-  }
-
-  try {
-    const raw = fs.readFileSync(DATA_FILE_PATH, 'utf8');
-    const parsed = JSON.parse(raw);
-    if (Array.isArray(parsed)) {
-      return parsed;
-    }
-    throw new Error('Invalid bookings file');
-  } catch (error) {
-    console.error('[Bookings] Error al leer bookings.json, restaurando datos vacíos', error);
-    saveBookingsToFile([]);
-    return [];
-  }
-}
-
-function saveBookingsToFile(data) {
-  try {
-    fs.writeFileSync(DATA_FILE_PATH, JSON.stringify(data, null, 2), 'utf8');
-  } catch (error) {
-    console.error('[Bookings] Error al guardar bookings.json', error);
-  }
-}
-
-let bookings = loadBookingsFromFile();
+const PENDING_CONFIRMATION_STATUS = 'pending_confirmation';
+const CONFIRMED_STATUS = 'confirmed';
+const CANCELLED_STATUSES = new Set(['cancelled', 'cancelado', 'cancelada']);
+const COMPLETED_STATUS = 'completed';
+const EXPIRED_STATUS = 'expired';
+const PAYMENT_PENDING_STATUS = 'pending';
+const PAYMENT_APPROVED_STATUS = 'approved';
+const PENDING_CONFIRMATION_WINDOW_MS = 60 * 60 * 1000;
 
 const toMinutes = (time) => {
   const [hh = '0', mm = '0'] = String(time || '').split(':');
@@ -50,6 +26,97 @@ const toHHMM = (minutes) => {
 const overlaps = (startA, endA, startB, endB) => {
   return startA < endB && startB < endA;
 };
+
+function parseDateValue(value) {
+  const date = value instanceof Date ? value : new Date(value);
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+
+function getPendingConfirmationExpiresAt(value) {
+  const createdAt = parseDateValue(value);
+  if (!createdAt) return null;
+  return new Date(createdAt.getTime() + PENDING_CONFIRMATION_WINDOW_MS);
+}
+
+function isExpiredPendingConfirmation(booking, referenceDate = new Date()) {
+  const normalizedStatus = (booking?.status || '').toString().toLowerCase();
+  if (normalizedStatus !== PENDING_CONFIRMATION_STATUS) {
+    return false;
+  }
+
+  const expiresAt = getPendingConfirmationExpiresAt(booking.createdAt);
+  if (!expiresAt) return false;
+
+  return expiresAt.getTime() <= referenceDate.getTime();
+}
+
+function getEffectiveBookingStatus(booking, referenceDate = new Date()) {
+  if (isExpiredPendingConfirmation(booking, referenceDate)) {
+    return EXPIRED_STATUS;
+  }
+  return booking?.status || '';
+}
+
+function isBlockingStatus(status) {
+  const normalizedStatus = (status || '').toString().toLowerCase();
+  return normalizedStatus === CONFIRMED_STATUS || normalizedStatus === COMPLETED_STATUS;
+}
+
+function isBookingBlockingSlot(booking, referenceDate = new Date()) {
+  const normalizedStatus = (booking?.status || '').toString().toLowerCase();
+  if (CANCELLED_STATUSES.has(normalizedStatus) || normalizedStatus === EXPIRED_STATUS) {
+    return false;
+  }
+  if (normalizedStatus === PENDING_CONFIRMATION_STATUS) {
+    return !isExpiredPendingConfirmation(booking, referenceDate);
+  }
+  return isBlockingStatus(normalizedStatus);
+}
+
+function toIsoDateOnly(value) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return null;
+  }
+  return date.toISOString().slice(0, 10);
+}
+
+function mapBookingRow(booking) {
+  const createdAt = parseDateValue(booking.createdAt);
+  const effectiveStatus = getEffectiveBookingStatus(booking);
+  const expiresAt =
+    effectiveStatus === PENDING_CONFIRMATION_STATUS || effectiveStatus === EXPIRED_STATUS
+      ? getPendingConfirmationExpiresAt(booking.createdAt)
+      : null;
+
+  return {
+    id: booking.id,
+    date: booking.date,
+    startTime: booking.startTime,
+    endTime: booking.endTime,
+    durationMinutes: booking.durationMinutes,
+    clientName: booking.clientName,
+    contact: booking.contact || '',
+    contactPhone: booking.contactPhone || '',
+    contactEmail: booking.contactEmail || '',
+    serviceId: booking.serviceId || null,
+    service: booking.service,
+    serviceCategory: booking.serviceCategory || '',
+    stylist: booking.stylist,
+    stylistId: booking.stylistId,
+    paymentMethod: booking.paymentMethod || '',
+    paymentStatus: booking.paymentStatus || '',
+    paymentId: booking.paymentId || undefined,
+    paymentApprovedAt: booking.paymentApprovedAt || undefined,
+    price: Number(booking.price) || 0,
+    status: effectiveStatus,
+    rawStatus: booking.status,
+    notes: booking.notes || '',
+    createdAt: createdAt ? createdAt.toISOString() : String(booking.createdAt),
+    expiresAt: expiresAt ? expiresAt.toISOString() : undefined,
+    isExpired: effectiveStatus === EXPIRED_STATUS,
+  };
+}
 
 function getScheduleForDate(staff, isoDate) {
   if (!staff) return null;
@@ -91,20 +158,37 @@ function getScheduleForDate(staff, isoDate) {
   return [{ start: defaultStart, end: defaultEnd }];
 }
 
-function listBookingsByRange(fromIsoDate, toIsoDate) {
-  const from = new Date(fromIsoDate);
-  const to = new Date(toIsoDate);
-  return bookings.filter((booking) => {
-    const date = new Date(booking.date);
-    return date >= from && date <= to;
+async function listBookingsByRange(fromIsoDate, toIsoDate) {
+  const fromDate = toIsoDateOnly(fromIsoDate);
+  const toDate = toIsoDateOnly(toIsoDate);
+
+  if (!fromDate || !toDate) {
+    return [];
+  }
+
+  const items = await prisma.appBooking.findMany({
+    where: {
+      date: {
+        gte: fromDate,
+        lte: toDate,
+      },
+    },
+    orderBy: [{ date: 'asc' }, { startTime: 'asc' }],
   });
+
+  return items.map(mapBookingRow);
 }
 
-function listBookingsByDate(isoDate) {
-  return bookings.filter((booking) => booking.date === isoDate);
+async function listBookingsByDate(isoDate) {
+  const items = await prisma.appBooking.findMany({
+    where: { date: isoDate },
+    orderBy: { startTime: 'asc' },
+  });
+
+  return items.map(mapBookingRow);
 }
 
-function getAvailableSlotsForStaff(staff, isoDate, durationMinutes) {
+async function getAvailableSlotsForStaff(staff, isoDate, durationMinutes) {
   const schedule = getScheduleForDate(staff, isoDate);
   if (!schedule) return [];
 
@@ -114,8 +198,20 @@ function getAvailableSlotsForStaff(staff, isoDate, durationMinutes) {
       ? requestedDuration
       : Number(staff.slotDurationMinutes) || 45;
   const baseStep = Number(staff.slotDurationMinutes) || 45;
-  const takenSlots = listBookingsByDate(isoDate)
-    .filter((booking) => booking.stylistId === staff.id && booking.status !== 'cancelled')
+
+  const takenBookings = await prisma.appBooking.findMany({
+    where: {
+      date: isoDate,
+      stylistId: staff.id,
+      status: {
+        notIn: ['cancelled', 'cancelado', 'cancelada'],
+      },
+    },
+    orderBy: { startTime: 'asc' },
+  });
+
+  const takenSlots = takenBookings
+    .filter((booking) => isBookingBlockingSlot(booking))
     .map((booking) => ({
       start: toMinutes(booking.startTime),
       end: toMinutes(booking.endTime),
@@ -143,6 +239,7 @@ function getAvailableSlotsForStaff(staff, isoDate, durationMinutes) {
       }
       cursor = Math.max(cursor, booking.end);
     });
+
     if (cursor < endMinutes) {
       freeIntervals.push({ start: cursor, end: endMinutes });
     }
@@ -170,13 +267,15 @@ function getAvailableSlotsForStaff(staff, isoDate, durationMinutes) {
   return Array.from(slots).sort();
 }
 
-function createBooking({
+async function createBooking({
   staff,
   date,
   startTime,
   durationMinutes,
   clientName,
   contact,
+  contactPhone,
+  contactEmail,
   serviceId,
   service,
   serviceCategory,
@@ -198,59 +297,115 @@ function createBooking({
     const scheduleEnd = toMinutes(interval.end);
     return start >= scheduleStart && end <= scheduleEnd;
   });
+
   if (!fitsSchedule) {
     throw new Error('OUTSIDE_SCHEDULE');
   }
 
-  const conflicts = listBookingsByDate(date).some(
-    (booking) =>
-      booking.stylistId === staff.id &&
-      booking.status !== 'cancelled' &&
-      overlaps(start, end, toMinutes(booking.startTime), toMinutes(booking.endTime))
-  );
+  const existing = await prisma.appBooking.findMany({
+    where: {
+      date,
+      stylistId: staff.id,
+      status: {
+        notIn: ['cancelled', 'cancelado', 'cancelada'],
+      },
+    },
+  });
+
+  const conflicts = existing
+    .filter((booking) => isBookingBlockingSlot(booking))
+    .some((booking) =>
+    overlaps(start, end, toMinutes(booking.startTime), toMinutes(booking.endTime))
+    );
+
   if (conflicts) {
     throw new Error('SLOT_TAKEN');
   }
 
-  const booking = {
-    id: randomUUID(),
-    date,
-    startTime,
-    endTime: toHHMM(end),
-    durationMinutes: slotDuration,
-    clientName: clientName?.trim() || 'Cliente',
-    contact: contact?.trim() || '',
-    serviceId: serviceId || null,
-    service: service?.trim() || 'Turno',
-    serviceCategory: serviceCategory?.trim() || '',
-    stylist: staff.name,
-    stylistId: staff.id,
-    paymentMethod: 'pendiente',
-    price: Number(price) || 0,
-    status: 'confirmado',
-    notes: notes?.trim() || '',
-    createdAt: new Date().toISOString(),
-  };
+  const created = await prisma.appBooking.create({
+    data: {
+      id: randomUUID(),
+      date,
+      startTime,
+      endTime: toHHMM(end),
+      durationMinutes: slotDuration,
+      clientName: clientName?.trim() || 'Cliente',
+      contact: contactPhone?.trim() || contact?.trim() || '',
+      contactPhone: contactPhone?.trim() || '',
+      contactEmail: contactEmail?.trim() || '',
+      serviceId: serviceId || null,
+      service: service?.trim() || 'Turno',
+      serviceCategory: serviceCategory?.trim() || '',
+      stylist: staff.name,
+      stylistId: staff.id,
+      paymentMethod: 'Transferencia',
+      paymentStatus: PAYMENT_PENDING_STATUS,
+      price: Number(price) || 0,
+      status: PENDING_CONFIRMATION_STATUS,
+      notes: notes?.trim() || '',
+    },
+  });
 
-  bookings.push(booking);
-  saveBookingsToFile(bookings);
-  return booking;
+  return mapBookingRow(created);
 }
 
-function cancelBooking(id) {
-  const booking = bookings.find((item) => item.id === id);
-  if (!booking) throw new Error('BOOKING_NOT_FOUND');
-  booking.status = 'cancelled';
-  saveBookingsToFile(bookings);
-  return booking;
+async function cancelBooking(id) {
+  try {
+    const updated = await prisma.appBooking.update({
+      where: { id },
+      data: { status: 'cancelled' },
+    });
+    return mapBookingRow(updated);
+  } catch (error) {
+    if (error && error.code === 'P2025') {
+      throw new Error('BOOKING_NOT_FOUND');
+    }
+    throw error;
+  }
+}
+
+async function confirmBooking(id) {
+  const booking = await prisma.appBooking.findUnique({
+    where: { id },
+  });
+
+  if (!booking) {
+    throw new Error('BOOKING_NOT_FOUND');
+  }
+
+  if (isExpiredPendingConfirmation(booking)) {
+    throw new Error('BOOKING_EXPIRED');
+  }
+
+  const normalizedStatus = (booking.status || '').toString().toLowerCase();
+  if (normalizedStatus !== PENDING_CONFIRMATION_STATUS) {
+    throw new Error('BOOKING_NOT_PENDING');
+  }
+
+  const updated = await prisma.appBooking.update({
+    where: { id },
+    data: {
+      status: CONFIRMED_STATUS,
+      paymentStatus: PAYMENT_APPROVED_STATUS,
+      paymentApprovedAt: new Date().toISOString(),
+    },
+  });
+
+  return mapBookingRow(updated);
 }
 
 module.exports = {
-  bookings,
   listBookingsByRange,
   listBookingsByDate,
   getAvailableSlotsForStaff,
   createBooking,
   cancelBooking,
+  confirmBooking,
   getScheduleForDate,
+  getEffectiveBookingStatus,
+  isExpiredPendingConfirmation,
+  PENDING_CONFIRMATION_STATUS,
+  CONFIRMED_STATUS,
+  EXPIRED_STATUS,
+  PENDING_CONFIRMATION_WINDOW_MS,
 };

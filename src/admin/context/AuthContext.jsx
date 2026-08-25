@@ -1,5 +1,5 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useReducer } from 'react';
-import { login as apiLogin, fetchCurrentUser } from '../api/auth.js';
+import { login as apiLogin, loginWithGoogle as apiLoginWithGoogle, fetchCurrentUser } from '../api/auth.js';
 
 const TOKEN_STORAGE_KEY = 'turnapp_admin_token';
 
@@ -75,6 +75,19 @@ export function AuthProvider({ children }) {
     }
   }, []);
 
+  const handleGoogleLogin = useCallback(async ({ idToken }) => {
+    dispatch({ type: 'INIT' });
+    try {
+      const { token, user } = await apiLoginWithGoogle({ idToken });
+      window.localStorage.setItem(TOKEN_STORAGE_KEY, token);
+      dispatch({ type: 'LOGIN_SUCCESS', payload: { token, user } });
+      return { token, user };
+    } catch (error) {
+      dispatch({ type: 'ERROR', payload: error.message || 'No se pudo iniciar sesión con Google' });
+      throw error;
+    }
+  }, []);
+
   const handleLogout = useCallback(() => {
     window.localStorage.removeItem(TOKEN_STORAGE_KEY);
     dispatch({ type: 'LOGOUT' });
@@ -87,9 +100,10 @@ export function AuthProvider({ children }) {
       token: state.token,
       error: state.error,
       login: handleLogin,
+      loginWithGoogle: handleGoogleLogin,
       logout: handleLogout,
     }),
-    [state, handleLogin, handleLogout]
+    [state, handleLogin, handleGoogleLogin, handleLogout]
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

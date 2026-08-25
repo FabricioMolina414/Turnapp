@@ -695,3 +695,49 @@ model UserMfaMethod {
 
   @@unique([userId, type, label])
 }
+
+model AppStaff {
+  id                  String       @id
+  name                String
+  role                String?
+  specialties         String[]     @default([])
+  availability        String?
+  avatar              String?
+  workSchedule        Json
+  slotDurationMinutes Int          @default(45)
+  createdAt           DateTime     @default(now())
+  updatedAt           DateTime     @updatedAt
+
+  bookings AppBooking[]
+}
+
+model AppBooking {
+  id                String    @id
+  date              String
+  startTime         String
+  endTime           String
+  durationMinutes   Int
+  clientName        String
+  contact           String?
+  contactPhone      String?
+  contactEmail      String?
+  serviceId         String?
+  service           String
+  serviceCategory   String?
+  stylist           String
+  stylistId         String
+  paymentMethod     String?
+  paymentStatus     String?
+  paymentId         String?
+  paymentApprovedAt String?
+  price             Decimal   @default(0) @db.Decimal(10, 2)
+  status            String
+  notes             String?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  staff AppStaff @relation(fields: [stylistId], references: [id], onDelete: Restrict)
+
+  @@index([date])
+  @@index([stylistId, date])
+}

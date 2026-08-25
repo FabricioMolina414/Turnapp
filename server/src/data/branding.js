@@ -11,7 +11,14 @@ const DEFAULT_BRANDING = {
   navbarLogoUrl: null,
   footerLogoUrl: null,
   locationAddress: 'El Chaco 106, Córdoba Capital',
+  businessHours: '',
+  whatsappPhone: '',
+  instagramUrl: '',
+  transferAlias: '',
+  transferAccountHolder: '',
+  transferDestination: '',
   highlightMessage: 'Agendá tu turno en línea y recibí la confirmación al instante.',
+  workGallery: [],
 };
 
 function saveBrandingToFile(data) {
@@ -53,6 +60,49 @@ function normalizeText(value) {
   return trimmed.length ? trimmed : null;
 }
 
+function normalizeInstagramUrl(value) {
+  const trimmed = normalizeText(value);
+  if (!trimmed) return null;
+
+  const withoutAt = trimmed.replace(/^@+/, '');
+  if (/^https?:\/\//i.test(withoutAt)) {
+    return withoutAt;
+  }
+
+  const username = withoutAt
+    .replace(/^instagram\.com\//i, '')
+    .replace(/^www\.instagram\.com\//i, '')
+    .replace(/^\/+/, '')
+    .replace(/\/+$/, '');
+
+  if (!username) return null;
+  return `https://instagram.com/${username}`;
+}
+
+function normalizeWorkGallery(value) {
+  if (!Array.isArray(value)) return [];
+
+  const normalized = value
+    .map((item, index) => {
+      const rawNumber = Number.parseInt(item?.cardNumber, 10);
+      const cardNumber = Number.isFinite(rawNumber) && rawNumber > 0 ? rawNumber : index + 1;
+      const imageUrl = normalizeText(item?.imageUrl);
+      const title = normalizeText(item?.title);
+      const description = normalizeText(item?.description);
+      return { cardNumber, imageUrl, title, description };
+    })
+    .sort((a, b) => a.cardNumber - b.cardNumber)
+    .map((item, index) => ({
+      cardNumber: index + 1,
+      imageUrl: item.imageUrl,
+      title: item.title,
+      description: item.description,
+    }))
+    .slice(0, 24);
+
+  return normalized;
+}
+
 let brandingSettings = loadBrandingFromFile();
 
 function getBranding() {
@@ -67,7 +117,14 @@ function updateBranding({
   navbarLogoUrl,
   footerLogoUrl,
   locationAddress,
+  businessHours,
+  whatsappPhone,
+  instagramUrl,
+  transferAlias,
+  transferAccountHolder,
+  transferDestination,
   highlightMessage,
+  workGallery,
 } = {}) {
   if (primaryColor !== undefined) {
     if (!isValidHexColor(primaryColor)) {
@@ -102,8 +159,29 @@ function updateBranding({
   if (locationAddress !== undefined) {
     brandingSettings.locationAddress = normalizeText(locationAddress);
   }
+  if (businessHours !== undefined) {
+    brandingSettings.businessHours = normalizeText(businessHours);
+  }
+  if (whatsappPhone !== undefined) {
+    brandingSettings.whatsappPhone = normalizeText(whatsappPhone);
+  }
+  if (instagramUrl !== undefined) {
+    brandingSettings.instagramUrl = normalizeInstagramUrl(instagramUrl);
+  }
+  if (transferAlias !== undefined) {
+    brandingSettings.transferAlias = normalizeText(transferAlias);
+  }
+  if (transferAccountHolder !== undefined) {
+    brandingSettings.transferAccountHolder = normalizeText(transferAccountHolder);
+  }
+  if (transferDestination !== undefined) {
+    brandingSettings.transferDestination = normalizeText(transferDestination);
+  }
   if (highlightMessage !== undefined) {
     brandingSettings.highlightMessage = normalizeText(highlightMessage);
+  }
+  if (workGallery !== undefined) {
+    brandingSettings.workGallery = normalizeWorkGallery(workGallery);
   }
 
   saveBrandingToFile(brandingSettings);

@@ -2,3 +2,11 @@ node_modules
 .DS_Store
 dist
 *.local
+server/.env
+.env
+server/src/data/bookings.json
+server/src/data/branding.json
+logs.txt
+server/.pgdata/
+**/prisma_schema_tmp
+*:Zone.Identifier

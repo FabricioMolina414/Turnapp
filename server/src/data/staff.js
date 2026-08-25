@@ -1,8 +1,5 @@
 const { randomUUID } = require('crypto');
-const fs = require('fs');
-const path = require('path');
-
-const DATA_FILE_PATH = path.join(__dirname, 'staff.json');
+const { prisma } = require('../config/database');
 
 const DEFAULT_AVATAR =
   'data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128"><rect width="128" height="128" rx="24" fill="%23f1f5f9"/><circle cx="64" cy="52" r="26" fill="%2394a3b8"/><path d="M24 112c0-22 18-40 40-40s40 18 40 40" fill="%23cbd5f5"/></svg>';
@@ -21,6 +18,8 @@ const DEFAULT_SCHEDULE = {
   overrides: {},
 };
 
+const LEGACY_DEFAULT_SCHEDULE = { ...DEFAULT_SCHEDULE };
+
 const DEFAULT_STAFF = [
   {
     id: 'ana',
@@ -28,6 +27,13 @@ const DEFAULT_STAFF = [
     role: 'Colorista senior',
     specialties: ['Balayage', 'Tratamientos reconstructivos', 'Cortes bob'],
     availability: 'Lunes a sábado · 09:00 a 17:00',
+    workSchedule: {
+      ...DEFAULT_SCHEDULE,
+      availabilityDays: [1, 2, 3, 4, 5, 6],
+      defaultStart: '09:00',
+      defaultEnd: '17:00',
+    },
+    slotDurationMinutes: 45,
     avatar:
       'https://images.unsplash.com/photo-1524504388940-b1c1722653e1?auto=format&fit=crop&w=400&q=80',
   },
@@ -37,6 +43,13 @@ const DEFAULT_STAFF = [
     role: 'Barbero master',
     specialties: ['Fades', 'Perfilado de barba', 'Cejas masculinas'],
     availability: 'Lunes a viernes · 10:00 a 18:00',
+    workSchedule: {
+      ...DEFAULT_SCHEDULE,
+      availabilityDays: [1, 2, 3, 4, 5],
+      defaultStart: '10:00',
+      defaultEnd: '18:00',
+    },
+    slotDurationMinutes: 45,
     avatar:
       'https://images.unsplash.com/photo-1487412720507-e7ab37603c6f?auto=format&fit=crop&w=400&q=80',
   },
@@ -46,6 +59,13 @@ const DEFAULT_STAFF = [
     role: 'Manicurista y nail artist',
     specialties: ['Semipermanente', 'Nail art minimalista', 'Spa de manos'],
     availability: 'Martes a sábado · 09:00 a 15:00',
+    workSchedule: {
+      ...DEFAULT_SCHEDULE,
+      availabilityDays: [2, 3, 4, 5, 6],
+      defaultStart: '09:00',
+      defaultEnd: '15:00',
+    },
+    slotDurationMinutes: 60,
     avatar:
       'https://images.unsplash.com/photo-1582719478250-c89cae4dc85b?auto=format&fit=crop&w=400&q=80',
   },
@@ -55,60 +75,27 @@ const DEFAULT_STAFF = [
     role: 'Stylist integral',
     specialties: ['Cortes masculinos', 'Tratamientos capilares', 'Asesoría de imagen'],
     availability: 'Miércoles a domingo · 11:00 a 19:00',
+    workSchedule: {
+      ...DEFAULT_SCHEDULE,
+      availabilityDays: [3, 4, 5, 6, 0],
+      defaultStart: '11:00',
+      defaultEnd: '19:00',
+    },
+    slotDurationMinutes: 45,
     avatar:
       'https://images.unsplash.com/photo-1521572267360-ee0c2909d518?auto=format&fit=crop&w=400&q=80',
   },
 ];
 
-function loadStaffFromFile() {
-  if (!fs.existsSync(DATA_FILE_PATH)) {
-    saveStaffToFile(DEFAULT_STAFF);
-    return [...DEFAULT_STAFF];
-  }
-
-  try {
-    const fileContents = fs.readFileSync(DATA_FILE_PATH, 'utf8');
-    const parsed = JSON.parse(fileContents);
-    if (Array.isArray(parsed)) {
-      return parsed.map((member) => ({
-        ...member,
-        workSchedule: member.workSchedule ? normalizeSchedule(member.workSchedule) : { ...DEFAULT_SCHEDULE },
-        slotDurationMinutes:
-          typeof member.slotDurationMinutes === 'number' && member.slotDurationMinutes > 0
-            ? member.slotDurationMinutes
-            : 45,
-      }));
-    }
-    throw new Error('Invalid data format');
-  } catch (error) {
-    console.error('[Staff] Error al leer staff.json, restaurando datos por defecto', error);
-    saveStaffToFile(DEFAULT_STAFF);
-    return [...DEFAULT_STAFF];
-  }
-}
-
-function saveStaffToFile(data) {
-  try {
-    fs.writeFileSync(DATA_FILE_PATH, JSON.stringify(data, null, 2), 'utf8');
-  } catch (error) {
-    console.error('[Staff] Error al guardar staff.json', error);
-  }
-}
-
-const staffMembers = loadStaffFromFile();
-
-function listStaff() {
-  return staffMembers;
-}
-
 function normalizeSchedule(inputSchedule) {
-  if (!inputSchedule) return { ...DEFAULT_SCHEDULE };
+  if (!inputSchedule || typeof inputSchedule !== 'object') return { ...DEFAULT_SCHEDULE };
   const rawAvailability = Array.isArray(inputSchedule.availabilityDays)
     ? inputSchedule.availabilityDays
     : DEFAULT_SCHEDULE.availabilityDays;
   const availabilityDays = rawAvailability
     .map((value) => Number(value))
     .filter((value) => Number.isInteger(value) && value >= 0 && value <= 6);
+
   const safeSchedule = {
     mode: inputSchedule.mode === 'split' ? 'split' : 'continuous',
     defaultStart: inputSchedule.defaultStart || DEFAULT_SCHEDULE.defaultStart,
@@ -139,14 +126,108 @@ function normalizeSchedule(inputSchedule) {
   return safeSchedule;
 }
 
-function addStaffMember({ name, role, specialties, availability, avatar, workSchedule, slotDurationMinutes }) {
+let seedPromise = null;
+
+function hasLegacyDefaultSchedule(workSchedule) {
+  const normalizedIncoming = normalizeSchedule(workSchedule);
+  const normalizedLegacy = normalizeSchedule(LEGACY_DEFAULT_SCHEDULE);
+  return JSON.stringify(normalizedIncoming) === JSON.stringify(normalizedLegacy);
+}
+
+async function ensureSeededStaff() {
+  if (!seedPromise) {
+    seedPromise = (async () => {
+      const total = await prisma.appStaff.count();
+      if (total === 0) {
+        await prisma.appStaff.createMany({
+          data: DEFAULT_STAFF.map((member) => ({
+            id: member.id,
+            name: member.name,
+            role: member.role,
+            specialties: member.specialties,
+            availability: member.availability,
+            avatar: member.avatar,
+            workSchedule: normalizeSchedule(member.workSchedule),
+            slotDurationMinutes: member.slotDurationMinutes || 45,
+          })),
+        });
+        return;
+      }
+
+      const seededMembers = await prisma.appStaff.findMany({
+        where: {
+          id: {
+            in: DEFAULT_STAFF.map((member) => member.id),
+          },
+        },
+      });
+
+      await Promise.all(
+        seededMembers.map((member) => {
+          const definition = DEFAULT_STAFF.find((item) => item.id === member.id);
+          if (!definition) return Promise.resolve();
+
+          const shouldRefreshSchedule =
+            hasLegacyDefaultSchedule(member.workSchedule) &&
+            Number(member.slotDurationMinutes || 45) === 45;
+
+          if (!shouldRefreshSchedule) {
+            return Promise.resolve();
+          }
+
+          return prisma.appStaff.update({
+            where: { id: member.id },
+            data: {
+              availability: definition.availability,
+              workSchedule: normalizeSchedule(definition.workSchedule),
+              slotDurationMinutes: definition.slotDurationMinutes || 45,
+            },
+          });
+        })
+      );
+    })();
+  }
+
+  return seedPromise;
+}
+
+function mapStaffRow(member) {
+  return {
+    id: member.id,
+    name: member.name,
+    role: member.role || '',
+    specialties: Array.isArray(member.specialties) ? member.specialties : [],
+    availability: member.availability || '',
+    avatar: member.avatar || DEFAULT_AVATAR,
+    workSchedule: normalizeSchedule(member.workSchedule),
+    slotDurationMinutes:
+      typeof member.slotDurationMinutes === 'number' && member.slotDurationMinutes > 0
+        ? member.slotDurationMinutes
+        : 45,
+  };
+}
+
+async function listStaff() {
+  await ensureSeededStaff();
+  const members = await prisma.appStaff.findMany({
+    orderBy: [{ createdAt: 'asc' }, { name: 'asc' }],
+  });
+  return members.map(mapStaffRow);
+}
+
+async function addStaffMember({ name, role, specialties, availability, avatar, workSchedule, slotDurationMinutes }) {
+  await ensureSeededStaff();
+
   if (!name || typeof name !== 'string' || !name.trim()) {
     throw new Error('STAFF_NAME_REQUIRED');
   }
 
   const trimmedName = name.trim();
+  const duplicate = await prisma.appStaff.findFirst({
+    where: { name: { equals: trimmedName, mode: 'insensitive' } },
+  });
 
-  if (staffMembers.some((member) => member.name.toLowerCase() === trimmedName.toLowerCase())) {
+  if (duplicate) {
     throw new Error('STAFF_NAME_EXISTS');
   }
 
@@ -159,49 +240,58 @@ function addStaffMember({ name, role, specialties, availability, avatar, workSch
   const normalizedDuration =
     typeof slotDurationMinutes === 'number' && slotDurationMinutes > 0 ? slotDurationMinutes : 45;
 
-  const newMember = {
-    id: randomUUID(),
-    name: trimmedName,
-    role: typeof role === 'string' ? role.trim() : '',
-    specialties: normalizedSpecialties,
-    availability: typeof availability === 'string' ? availability.trim() : '',
-    avatar: typeof avatar === 'string' && avatar.trim() ? avatar.trim() : DEFAULT_AVATAR,
-    workSchedule: normalizeSchedule(workSchedule),
-    slotDurationMinutes: normalizedDuration,
-  };
+  const created = await prisma.appStaff.create({
+    data: {
+      id: randomUUID(),
+      name: trimmedName,
+      role: typeof role === 'string' ? role.trim() : '',
+      specialties: normalizedSpecialties,
+      availability: typeof availability === 'string' ? availability.trim() : '',
+      avatar: typeof avatar === 'string' && avatar.trim() ? avatar.trim() : DEFAULT_AVATAR,
+      workSchedule: normalizeSchedule(workSchedule),
+      slotDurationMinutes: normalizedDuration,
+    },
+  });
 
-  staffMembers.push(newMember);
-  saveStaffToFile(staffMembers);
-  return newMember;
+  return mapStaffRow(created);
 }
 
-function updateStaffMember(id, { name, role, specialties, availability, avatar, workSchedule, slotDurationMinutes }) {
-  const member = staffMembers.find((item) => item.id === id);
+async function updateStaffMember(id, { name, role, specialties, availability, avatar, workSchedule, slotDurationMinutes }) {
+  await ensureSeededStaff();
+
+  const member = await prisma.appStaff.findUnique({ where: { id } });
   if (!member) {
     throw new Error('STAFF_NOT_FOUND');
   }
 
+  const data = {};
+
   if (name && typeof name === 'string' && name.trim()) {
     const trimmedName = name.trim();
-    const duplicate = staffMembers.find(
-      (item) => item.id !== id && item.name.toLowerCase() === trimmedName.toLowerCase()
-    );
+    const duplicate = await prisma.appStaff.findFirst({
+      where: {
+        id: { not: id },
+        name: { equals: trimmedName, mode: 'insensitive' },
+      },
+    });
+
     if (duplicate) {
       throw new Error('STAFF_NAME_EXISTS');
     }
-    member.name = trimmedName;
+
+    data.name = trimmedName;
   }
 
   if (role !== undefined) {
-    member.role = typeof role === 'string' ? role.trim() : member.role;
+    data.role = typeof role === 'string' ? role.trim() : member.role;
   }
 
   if (availability !== undefined) {
-    member.availability = typeof availability === 'string' ? availability.trim() : member.availability;
+    data.availability = typeof availability === 'string' ? availability.trim() : member.availability;
   }
 
   if (specialties !== undefined) {
-    member.specialties = Array.isArray(specialties)
+    data.specialties = Array.isArray(specialties)
       ? specialties
           .map((item) => (typeof item === 'string' ? item.trim() : ''))
           .filter((item) => item.length > 0)
@@ -209,71 +299,103 @@ function updateStaffMember(id, { name, role, specialties, availability, avatar, 
   }
 
   if (avatar !== undefined) {
-    member.avatar = typeof avatar === 'string' && avatar.trim() ? avatar.trim() : member.avatar;
+    data.avatar = typeof avatar === 'string' && avatar.trim() ? avatar.trim() : member.avatar;
   }
 
   if (workSchedule) {
-    member.workSchedule = normalizeSchedule({
-      ...member.workSchedule,
+    data.workSchedule = normalizeSchedule({
+      ...normalizeSchedule(member.workSchedule),
       ...workSchedule,
     });
   }
 
   if (typeof slotDurationMinutes === 'number' && slotDurationMinutes > 0) {
-    member.slotDurationMinutes = slotDurationMinutes;
+    data.slotDurationMinutes = slotDurationMinutes;
   }
 
-  saveStaffToFile(staffMembers);
-  return member;
+  const updated = await prisma.appStaff.update({
+    where: { id },
+    data,
+  });
+
+  return mapStaffRow(updated);
 }
 
-function removeStaffMember(id) {
-  const index = staffMembers.findIndex((member) => member.id === id);
-  if (index === -1) {
-    throw new Error('STAFF_NOT_FOUND');
+async function removeStaffMember(id) {
+  await ensureSeededStaff();
+
+  try {
+    const removed = await prisma.appStaff.delete({ where: { id } });
+    return mapStaffRow(removed);
+  } catch (error) {
+    if (error && error.code === 'P2025') {
+      throw new Error('STAFF_NOT_FOUND');
+    }
+    throw error;
   }
-  const [removed] = staffMembers.splice(index, 1);
-  saveStaffToFile(staffMembers);
-  return removed;
 }
 
-function updateStaffSchedule(
+async function updateStaffSchedule(
   id,
-  { defaultStart, defaultEnd, overrides, slotDurationMinutes, mode, shift1Start, shift1End, shift2Start, shift2End, availabilityDays }
+  {
+    defaultStart,
+    defaultEnd,
+    overrides,
+    slotDurationMinutes,
+    mode,
+    shift1Start,
+    shift1End,
+    shift2Start,
+    shift2End,
+    availabilityDays,
+  }
 ) {
-  const member = staffMembers.find((item) => item.id === id);
+  await ensureSeededStaff();
+
+  const member = await prisma.appStaff.findUnique({ where: { id } });
   if (!member) {
     throw new Error('STAFF_NOT_FOUND');
   }
 
-  member.workSchedule = normalizeSchedule({
-    ...member.workSchedule,
-    mode: mode || member.workSchedule?.mode,
-    defaultStart: defaultStart || member.workSchedule?.defaultStart,
-    defaultEnd: defaultEnd || member.workSchedule?.defaultEnd,
-    shift1Start: shift1Start || member.workSchedule?.shift1Start,
-    shift1End: shift1End || member.workSchedule?.shift1End,
-    shift2Start: shift2Start || member.workSchedule?.shift2Start,
-    shift2End: shift2End || member.workSchedule?.shift2End,
-    availabilityDays: availabilityDays || member.workSchedule?.availabilityDays,
-    overrides: overrides || member.workSchedule?.overrides,
+  const currentSchedule = normalizeSchedule(member.workSchedule);
+  const nextSchedule = normalizeSchedule({
+    ...currentSchedule,
+    mode: mode || currentSchedule.mode,
+    defaultStart: defaultStart || currentSchedule.defaultStart,
+    defaultEnd: defaultEnd || currentSchedule.defaultEnd,
+    shift1Start: shift1Start || currentSchedule.shift1Start,
+    shift1End: shift1End || currentSchedule.shift1End,
+    shift2Start: shift2Start || currentSchedule.shift2Start,
+    shift2End: shift2End || currentSchedule.shift2End,
+    availabilityDays: availabilityDays || currentSchedule.availabilityDays,
+    overrides: overrides || currentSchedule.overrides,
   });
 
+  const updateData = {
+    workSchedule: nextSchedule,
+  };
+
   if (typeof slotDurationMinutes === 'number' && slotDurationMinutes > 0) {
-    member.slotDurationMinutes = slotDurationMinutes;
+    updateData.slotDurationMinutes = slotDurationMinutes;
   }
 
-  saveStaffToFile(staffMembers);
-  return member;
+  const updated = await prisma.appStaff.update({
+    where: { id },
+    data: updateData,
+  });
+
+  return mapStaffRow(updated);
 }
 
 module.exports = {
-  staffMembers,
+  DEFAULT_AVATAR,
+  DEFAULT_AVAILABILITY_DAYS,
+  DEFAULT_SCHEDULE,
+  DEFAULT_STAFF,
+  normalizeSchedule,
   listStaff,
   addStaffMember,
   updateStaffMember,
   removeStaffMember,
   updateStaffSchedule,
-  DEFAULT_AVATAR,
-  DEFAULT_STAFF,
 };

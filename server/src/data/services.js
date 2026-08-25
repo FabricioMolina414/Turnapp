@@ -89,6 +89,26 @@ function listServices() {
   return servicesCatalog;
 }
 
+function normalizeProfessionalName(value) {
+  return typeof value === 'string' ? value.trim().toLowerCase() : '';
+}
+
+function serviceSupportsProfessional(service, professionalName) {
+  const normalizedName = normalizeProfessionalName(professionalName);
+  if (!normalizedName) return false;
+
+  const assignedProfessionals = Array.isArray(service?.professionals) ? service.professionals : [];
+  if (!assignedProfessionals.length) return true;
+
+  return assignedProfessionals.some((item) => normalizeProfessionalName(item) === normalizedName);
+}
+
+function listActiveServicesForProfessional(professionalName) {
+  return servicesCatalog.filter(
+    (service) => service?.active !== false && serviceSupportsProfessional(service, professionalName)
+  );
+}
+
 function addService({ name, durationMinutes, price, category, professionals, description, active = true }) {
   if (!name || typeof name !== 'string' || !name.trim()) {
     throw new Error('SERVICE_NAME_REQUIRED');
@@ -165,6 +185,8 @@ function removeService(id) {
 module.exports = {
   servicesCatalog,
   listServices,
+  listActiveServicesForProfessional,
+  serviceSupportsProfessional,
   addService,
   updateService,
   removeService,

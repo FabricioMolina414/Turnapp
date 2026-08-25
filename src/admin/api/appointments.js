@@ -34,3 +34,10 @@ export async function cancelAppointment({ token, appointmentId }) {
     token,
   });
 }
+
+export async function confirmAppointment({ token, appointmentId }) {
+  return request(`/appointments/${appointmentId}/confirm`, {
+    method: 'PATCH',
+    token,
+  });
+}

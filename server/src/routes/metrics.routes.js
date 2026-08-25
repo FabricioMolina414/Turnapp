@@ -4,9 +4,9 @@ const { listMonthlyMetrics } = require('../data/metrics');
 
 const router = express.Router();
 
-router.use(authenticate, authorize(['admin', 'superadmin']));
+router.use(authenticate);
 
-router.get('/monthly', (req, res) => {
+router.get('/monthly', authorize(['admin', 'staff', 'superadmin']), (req, res) => {
   return res.json({ metrics: listMonthlyMetrics() });
 });
 
