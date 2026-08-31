@@ -1,5 +1,4 @@
 const bcrypt = require('bcryptjs');
-const crypto = require('crypto');
 const { prisma } = require('../config/database');
 
 const ROLE_TO_API = {
@@ -109,7 +108,7 @@ async function addAdminUser({ name, email, password, username, role }) {
   return sanitizeUser(newUser);
 }
 
-async function findOrCreateGoogleUser({ email, name, avatarUrl, googleSub }) {
+async function findUserForGoogleLogin({ email, name, avatarUrl, googleSub }) {
   if (!email) {
     throw new Error('EMAIL_REQUIRED');
   }
@@ -120,22 +119,11 @@ async function findOrCreateGoogleUser({ email, name, avatarUrl, googleSub }) {
   });
 
   if (!user) {
-    const username = await buildUniqueUsernameFromEmail(normalizedEmail);
-    const passwordHash = bcrypt.hashSync(crypto.randomBytes(32).toString('hex'), 10);
-    user = await prisma.user.create({
-      data: {
-        name: name || username,
-        username,
-        email: normalizedEmail,
-        passwordHash,
-        role: mapRoleFromApi('staff'),
-        avatarUrl: avatarUrl || null,
-        metadata: {
-          authProvider: 'google',
-          googleSub: googleSub || null,
-        },
-      },
-    });
+    // No auto-provisioning: a Google login only works for accounts a
+    // superadmin already created (via addAdminUser / "Administradores").
+    // Otherwise anyone with a Google account could self-register as staff
+    // and read customer/business data.
+    throw new Error('GOOGLE_ACCOUNT_NOT_INVITED');
   } else {
     const metadata = user.metadata ?? {};
     const nextMetadata =
@@ -255,7 +243,7 @@ module.exports = {
   findUserByIdentifier,
   findUserById,
   addAdminUser,
-  findOrCreateGoogleUser,
+  findUserForGoogleLogin,
   updateUserRole,
   listAdmins,
   resetUserPassword,

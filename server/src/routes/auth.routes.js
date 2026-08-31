@@ -1,7 +1,7 @@
 const express = require('express');
 const bcrypt = require('bcryptjs');
 const { OAuth2Client } = require('google-auth-library');
-const { findUserByIdentifier, sanitizeUser, findOrCreateGoogleUser } = require('../data/users');
+const { findUserByIdentifier, sanitizeUser, findUserForGoogleLogin } = require('../data/users');
 const { signToken } = require('../utils/jwt');
 const { authenticate } = require('../middleware/auth');
 const config = require('../config/env');
@@ -67,12 +67,23 @@ router.post('/google', async (req, res) => {
       return res.status(401).json({ message: 'Email de Google no verificado' });
     }
 
-    const safeUser = await findOrCreateGoogleUser({
-      email: payload.email,
-      name: payload.name,
-      avatarUrl: payload.picture,
-      googleSub: payload.sub,
-    });
+    let safeUser;
+    try {
+      safeUser = await findUserForGoogleLogin({
+        email: payload.email,
+        name: payload.name,
+        avatarUrl: payload.picture,
+        googleSub: payload.sub,
+      });
+    } catch (lookupError) {
+      if (lookupError.message === 'GOOGLE_ACCOUNT_NOT_INVITED') {
+        return res.status(403).json({
+          message:
+            'Tu cuenta de Google todavía no está autorizada. Pedile a un administrador que te invite desde el panel antes de iniciar sesión.',
+        });
+      }
+      throw lookupError;
+    }
 
     const token = signToken({
       sub: safeUser.id,
