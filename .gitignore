@@ -10,3 +10,5 @@ logs.txt
 server/.pgdata/
 **/prisma_schema_tmp
 *:Zone.Identifier
+.claude/settings.local.json
+.claude/scheduled_tasks.lock
