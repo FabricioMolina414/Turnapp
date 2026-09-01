@@ -41,3 +41,21 @@ export async function confirmAppointment({ token, appointmentId }) {
     token,
   });
 }
+
+export async function createManualAppointment({ token, appointment }) {
+  return request('/appointments', {
+    method: 'POST',
+    token,
+    body: appointment,
+  });
+}
+
+export async function fetchAppointmentAvailability({ token, staffId, date, durationMinutes }) {
+  const params = new URLSearchParams({ staffId, date });
+  if (durationMinutes) {
+    params.set('durationMinutes', durationMinutes);
+  }
+  return request(`/appointments/availability?${params.toString()}`, {
+    token,
+  });
+}

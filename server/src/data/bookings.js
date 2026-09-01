@@ -5,10 +5,15 @@ const PENDING_CONFIRMATION_STATUS = 'pending_confirmation';
 const CONFIRMED_STATUS = 'confirmed';
 const CANCELLED_STATUSES = new Set(['cancelled', 'cancelado', 'cancelada']);
 const COMPLETED_STATUS = 'completed';
-const EXPIRED_STATUS = 'expired';
 const PAYMENT_PENDING_STATUS = 'pending';
 const PAYMENT_APPROVED_STATUS = 'approved';
-const PENDING_CONFIRMATION_WINDOW_MS = 60 * 60 * 1000;
+// Ventana silenciosa: si nadie confirmó ni canceló un turno "pendiente" en
+// este tiempo, deja de bloquear ese horario para otros clientes. Es solo un
+// límite de disponibilidad, nunca se le muestra al cliente como un plazo y
+// nunca le impide al admin confirmar -- confirmBooking() no la usa, así que
+// un turno pendiente siempre se puede confirmar sin importar cuánto tiempo
+// pasó, mientras el horario no haya sido tomado por otra reserva.
+const PENDING_CONFIRMATION_WINDOW_MS = 24 * 60 * 60 * 1000;
 
 const toMinutes = (time) => {
   const [hh = '0', mm = '0'] = String(time || '').split(':');
@@ -38,7 +43,10 @@ function getPendingConfirmationExpiresAt(value) {
   return new Date(createdAt.getTime() + PENDING_CONFIRMATION_WINDOW_MS);
 }
 
-function isExpiredPendingConfirmation(booking, referenceDate = new Date()) {
+// Solo se usa para decidir si un turno pendiente sigue bloqueando el
+// horario (ver PENDING_CONFIRMATION_WINDOW_MS más arriba). No afecta el
+// estado que ve el cliente/admin ni la posibilidad de confirmarlo.
+function isPendingConfirmationStale(booking, referenceDate = new Date()) {
   const normalizedStatus = (booking?.status || '').toString().toLowerCase();
   if (normalizedStatus !== PENDING_CONFIRMATION_STATUS) {
     return false;
@@ -50,13 +58,6 @@ function isExpiredPendingConfirmation(booking, referenceDate = new Date()) {
   return expiresAt.getTime() <= referenceDate.getTime();
 }
 
-function getEffectiveBookingStatus(booking, referenceDate = new Date()) {
-  if (isExpiredPendingConfirmation(booking, referenceDate)) {
-    return EXPIRED_STATUS;
-  }
-  return booking?.status || '';
-}
-
 function isBlockingStatus(status) {
   const normalizedStatus = (status || '').toString().toLowerCase();
   return normalizedStatus === CONFIRMED_STATUS || normalizedStatus === COMPLETED_STATUS;
@@ -64,11 +65,11 @@ function isBlockingStatus(status) {
 
 function isBookingBlockingSlot(booking, referenceDate = new Date()) {
   const normalizedStatus = (booking?.status || '').toString().toLowerCase();
-  if (CANCELLED_STATUSES.has(normalizedStatus) || normalizedStatus === EXPIRED_STATUS) {
+  if (CANCELLED_STATUSES.has(normalizedStatus)) {
     return false;
   }
   if (normalizedStatus === PENDING_CONFIRMATION_STATUS) {
-    return !isExpiredPendingConfirmation(booking, referenceDate);
+    return !isPendingConfirmationStale(booking, referenceDate);
   }
   return isBlockingStatus(normalizedStatus);
 }
@@ -83,11 +84,12 @@ function toIsoDateOnly(value) {
 
 function mapBookingRow(booking) {
   const createdAt = parseDateValue(booking.createdAt);
-  const effectiveStatus = getEffectiveBookingStatus(booking);
-  const expiresAt =
-    effectiveStatus === PENDING_CONFIRMATION_STATUS || effectiveStatus === EXPIRED_STATUS
-      ? getPendingConfirmationExpiresAt(booking.createdAt)
-      : null;
+  const status = booking.status || '';
+  const normalizedStatus = status.toString().toLowerCase();
+  // Informativo para el admin ("pendiente desde hace X"), nunca bloquea
+  // la confirmación ni se le muestra al cliente como un plazo.
+  const pendingSince =
+    normalizedStatus === PENDING_CONFIRMATION_STATUS ? createdAt : null;
 
   return {
     id: booking.id,
@@ -109,12 +111,11 @@ function mapBookingRow(booking) {
     paymentId: booking.paymentId || undefined,
     paymentApprovedAt: booking.paymentApprovedAt || undefined,
     price: Number(booking.price) || 0,
-    status: effectiveStatus,
+    status,
     rawStatus: booking.status,
     notes: booking.notes || '',
     createdAt: createdAt ? createdAt.toISOString() : String(booking.createdAt),
-    expiresAt: expiresAt ? expiresAt.toISOString() : undefined,
-    isExpired: effectiveStatus === EXPIRED_STATUS,
+    pendingSince: pendingSince ? pendingSince.toISOString() : undefined,
   };
 }
 
@@ -281,6 +282,12 @@ async function createBooking({
   serviceCategory,
   price,
   notes,
+  // Por defecto replica el flujo público (reserva online a confirmar).
+  // El alta manual del admin pasa status/paymentMethod/paymentStatus
+  // propios porque el turno ya está acordado con el cliente.
+  status = PENDING_CONFIRMATION_STATUS,
+  paymentMethod = 'Transferencia',
+  paymentStatus = PAYMENT_PENDING_STATUS,
 }) {
   if (!staff) throw new Error('STAFF_REQUIRED');
   if (!date || !startTime) throw new Error('DATE_AND_TIME_REQUIRED');
@@ -338,10 +345,10 @@ async function createBooking({
       serviceCategory: serviceCategory?.trim() || '',
       stylist: staff.name,
       stylistId: staff.id,
-      paymentMethod: 'Transferencia',
-      paymentStatus: PAYMENT_PENDING_STATUS,
+      paymentMethod,
+      paymentStatus,
       price: Number(price) || 0,
-      status: PENDING_CONFIRMATION_STATUS,
+      status,
       notes: notes?.trim() || '',
     },
   });
@@ -373,10 +380,11 @@ async function confirmBooking(id) {
     throw new Error('BOOKING_NOT_FOUND');
   }
 
-  if (isExpiredPendingConfirmation(booking)) {
-    throw new Error('BOOKING_EXPIRED');
-  }
-
+  // A propósito no hay chequeo de vencimiento acá: un turno pendiente
+  // siempre se puede confirmar sin importar cuánto tiempo pasó desde que
+  // se pidió (ver PENDING_CONFIRMATION_WINDOW_MS). Si mientras tanto otro
+  // cliente ya confirmó ese mismo horario, el admin lo va a ver reflejado
+  // en la agenda y puede decidir manualmente cómo resolverlo.
   const normalizedStatus = (booking.status || '').toString().toLowerCase();
   if (normalizedStatus !== PENDING_CONFIRMATION_STATUS) {
     throw new Error('BOOKING_NOT_PENDING');
@@ -402,10 +410,7 @@ module.exports = {
   cancelBooking,
   confirmBooking,
   getScheduleForDate,
-  getEffectiveBookingStatus,
-  isExpiredPendingConfirmation,
   PENDING_CONFIRMATION_STATUS,
   CONFIRMED_STATUS,
-  EXPIRED_STATUS,
   PENDING_CONFIRMATION_WINDOW_MS,
 };

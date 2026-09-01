@@ -2057,11 +2057,6 @@ function Checkout({ data, onBack, onReturnHome, branding }) {
   const [canScrollPaymentRight, setCanScrollPaymentRight] = useState(false);
   const [isPaying, setIsPaying] = useState(false);
   const [paymentError, setPaymentError] = useState(null);
-  const reservationWindowMinutes = Number(data?.reservationWindowMinutes) || 60;
-  const reservationWindowLabel =
-    reservationWindowMinutes % 60 === 0
-      ? `${reservationWindowMinutes / 60} hora${reservationWindowMinutes / 60 === 1 ? '' : 's'}`
-      : `${reservationWindowMinutes} minutos`;
 
   const updatePaymentScrollState = useCallback(() => {
     const container = paymentListRef.current;
@@ -2219,15 +2214,12 @@ function Checkout({ data, onBack, onReturnHome, branding }) {
           <h2>Método de pago</h2>
           <div className="booking-alert">
             <p>
-              Importante: este horario queda reservado por {reservationWindowLabel} desde ahora.
+              <strong>Estado del turno: Pendiente.</strong> Tu turno quedó solicitado. Para
+              confirmarlo, realizá la transferencia y enviá el comprobante.
             </p>
             <p>
-              Tu turno quedó solicitado y pendiente de confirmación. Para confirmarlo, realizá la
-              transferencia y enviá el comprobante.
-            </p>
-            <p>
-              Cuando validemos el pago, te enviaremos la confirmación por WhatsApp o email. Si no
-              recibís ese aviso, o no lo ves en spam, el turno todavía no está confirmado.
+              A la brevedad vamos a revisar el comprobante y confirmarte el turno por WhatsApp o
+              email. Hasta que recibas ese aviso, el turno figura como "Pendiente".
             </p>
           </div>
           <div className="payment-method-carousel">

@@ -7,6 +7,8 @@ import {
   fetchMonthSummary,
   cancelAppointment,
   confirmAppointment,
+  createManualAppointment,
+  fetchAppointmentAvailability,
 } from './api/appointments.js';
 import { fetchMonthlyMetrics } from './api/metrics.js';
 import { fetchServices, createService, updateService, deleteService } from './api/services.js';
@@ -471,13 +473,10 @@ function getAppointmentStatusPresentation(status) {
   switch (normalized) {
     case 'confirmed':
     case 'confirmado':
-      return { label: 'Confirmado', className: 'status-confirmado' };
+      return { label: 'Turno confirmado', className: 'status-confirmado' };
     case 'pending_confirmation':
     case 'pendiente':
-      return { label: 'Pendiente de confirmacion', className: 'status-pendiente' };
-    case 'expired':
-    case 'vencido':
-      return { label: 'Vencido', className: 'status-sin-estado' };
+      return { label: 'Pendiente', className: 'status-pendiente' };
     case 'cancelled':
     case 'cancelado':
     case 'cancelada':
@@ -865,6 +864,7 @@ function AppointmentsView({
   onCancelAppointment,
   confirmingAppointmentId,
   cancellingAppointmentId,
+  onOpenManualBooking,
 }) {
   return (
     <div className="appointments-view">
@@ -889,6 +889,11 @@ function AppointmentsView({
                 ))}
               </select>
             </label>
+            {onOpenManualBooking && (
+              <button type="button" className="primary-button" onClick={onOpenManualBooking}>
+                + Cargar turno
+              </button>
+            )}
           </div>
         </header>
 
@@ -999,10 +1004,10 @@ function AppointmentDetails({ appointment, onConfirm, onCancel, confirmingId, ca
           <dt>Importe</dt>
           <dd>{currencyFormatter.format(appointment.price || 0)}</dd>
         </div>
-        {appointment.expiresAt && (
+        {appointment.pendingSince && (
           <div>
-            <dt>Reserva hasta</dt>
-            <dd>{new Date(appointment.expiresAt).toLocaleString('es-AR')}</dd>
+            <dt>Pendiente desde</dt>
+            <dd>{new Date(appointment.pendingSince).toLocaleString('es-AR')}</dd>
           </div>
         )}
       </dl>
@@ -1041,6 +1046,250 @@ function AppointmentDetails({ appointment, onConfirm, onCancel, confirmingId, ca
           {isCancelling ? 'Anulando...' : 'Anular turno'}
         </button>
       )}
+    </div>
+  );
+}
+
+const MANUAL_BOOKING_INITIAL_FORM = {
+  staffId: '',
+  serviceId: '',
+  date: '',
+  slot: '',
+  clientName: '',
+  contactPhone: '',
+  contactEmail: '',
+  paymentMethod: 'Efectivo',
+  notes: '',
+};
+
+function ManualBookingModal({ open, staff, services, isSaving, error, onClose, onSubmit, onFetchSlots }) {
+  const [form, setForm] = useState(MANUAL_BOOKING_INITIAL_FORM);
+  const [slots, setSlots] = useState([]);
+  const [isLoadingSlots, setIsLoadingSlots] = useState(false);
+  const [slotsError, setSlotsError] = useState(null);
+
+  useEffect(() => {
+    if (open) {
+      setForm(MANUAL_BOOKING_INITIAL_FORM);
+      setSlots([]);
+      setSlotsError(null);
+    }
+  }, [open]);
+
+  const servicesForStaff = useMemo(() => {
+    const selectedStaff = staff.find((member) => member.id === form.staffId);
+    if (!selectedStaff) return services;
+    return services.filter((svc) => {
+      const assigned = Array.isArray(svc.professionals) ? svc.professionals : [];
+      return assigned.length === 0 || assigned.includes(selectedStaff.name);
+    });
+  }, [services, staff, form.staffId]);
+
+  const selectedService = servicesForStaff.find((svc) => svc.id === form.serviceId) || null;
+
+  useEffect(() => {
+    if (!open || !form.staffId || !form.date) {
+      setSlots([]);
+      return;
+    }
+    let cancelled = false;
+    setIsLoadingSlots(true);
+    setSlotsError(null);
+    onFetchSlots({ staffId: form.staffId, date: form.date, durationMinutes: selectedService?.durationMinutes })
+      .then((response) => {
+        if (!cancelled) setSlots(response?.slots ?? []);
+      })
+      .catch((fetchError) => {
+        if (!cancelled) setSlotsError(fetchError.message || 'No se pudo cargar la disponibilidad.');
+      })
+      .finally(() => {
+        if (!cancelled) setIsLoadingSlots(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [open, form.staffId, form.date, selectedService?.durationMinutes, onFetchSlots]);
+
+  if (!open) return null;
+
+  const handleChange = (event) => {
+    const { name, value } = event.target;
+    setForm((prev) => {
+      const next = { ...prev, [name]: value };
+      if (name === 'staffId') {
+        next.serviceId = '';
+        next.slot = '';
+      }
+      if (name === 'serviceId' || name === 'date') {
+        next.slot = '';
+      }
+      return next;
+    });
+  };
+
+  const handleSubmit = async (event) => {
+    event.preventDefault();
+    await onSubmit({
+      staffId: form.staffId,
+      serviceId: form.serviceId || undefined,
+      durationMinutes: selectedService?.durationMinutes,
+      price: selectedService?.price,
+      date: form.date,
+      slot: form.slot,
+      clientName: form.clientName,
+      contactPhone: form.contactPhone,
+      contactEmail: form.contactEmail,
+      paymentMethod: form.paymentMethod,
+      notes: form.notes,
+    });
+  };
+
+  const canSubmit = form.staffId && form.date && form.slot && form.clientName.trim();
+
+  return (
+    <div className="modal-overlay" role="presentation">
+      <div className="modal-card" role="dialog" aria-modal="true" aria-labelledby="manual-booking-title">
+        <h3 id="manual-booking-title">Cargar turno manual</h3>
+        <p>
+          Usalo para anotar turnos que te piden directo (llamada, WhatsApp, en persona) y no pasan
+          por el sitio público. Queda cargado como confirmado.
+        </p>
+        <form onSubmit={handleSubmit} className="admins-form">
+          <div className="form-grid">
+            <div className="form-field">
+              <label htmlFor="manual-booking-staff">Profesional</label>
+              <select
+                id="manual-booking-staff"
+                name="staffId"
+                value={form.staffId}
+                onChange={handleChange}
+                disabled={isSaving}
+              >
+                <option value="">Seleccioná...</option>
+                {staff.map((member) => (
+                  <option key={member.id} value={member.id}>
+                    {member.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div className="form-field">
+              <label htmlFor="manual-booking-service">Servicio</label>
+              <select
+                id="manual-booking-service"
+                name="serviceId"
+                value={form.serviceId}
+                onChange={handleChange}
+                disabled={isSaving || !form.staffId}
+              >
+                <option value="">Otro / sin catálogo</option>
+                {servicesForStaff.map((svc) => (
+                  <option key={svc.id} value={svc.id}>
+                    {svc.name} · {currencyFormatter.format(svc.price || 0)}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div className="form-field">
+              <label htmlFor="manual-booking-date">Fecha</label>
+              <input
+                id="manual-booking-date"
+                name="date"
+                type="date"
+                value={form.date}
+                onChange={handleChange}
+                disabled={isSaving || !form.staffId}
+              />
+            </div>
+            <div className="form-field">
+              <label htmlFor="manual-booking-slot">Horario</label>
+              <select
+                id="manual-booking-slot"
+                name="slot"
+                value={form.slot}
+                onChange={handleChange}
+                disabled={isSaving || !form.date || isLoadingSlots}
+              >
+                <option value="">
+                  {isLoadingSlots ? 'Cargando horarios...' : slots.length ? 'Seleccioná...' : 'Sin horarios libres'}
+                </option>
+                {slots.map((slot) => (
+                  <option key={slot} value={slot}>
+                    {slot}
+                  </option>
+                ))}
+              </select>
+              {slotsError && <small className="form-hint form-hint-error">{slotsError}</small>}
+            </div>
+            <div className="form-field">
+              <label htmlFor="manual-booking-client">Nombre del cliente</label>
+              <input
+                id="manual-booking-client"
+                name="clientName"
+                type="text"
+                value={form.clientName}
+                onChange={handleChange}
+                disabled={isSaving}
+              />
+            </div>
+            <div className="form-field">
+              <label htmlFor="manual-booking-phone">WhatsApp / celular</label>
+              <input
+                id="manual-booking-phone"
+                name="contactPhone"
+                type="tel"
+                value={form.contactPhone}
+                onChange={handleChange}
+                disabled={isSaving}
+              />
+            </div>
+            <div className="form-field">
+              <label htmlFor="manual-booking-email">Email (opcional)</label>
+              <input
+                id="manual-booking-email"
+                name="contactEmail"
+                type="email"
+                value={form.contactEmail}
+                onChange={handleChange}
+                disabled={isSaving}
+              />
+            </div>
+            <div className="form-field">
+              <label htmlFor="manual-booking-payment">Cómo te paga</label>
+              <select
+                id="manual-booking-payment"
+                name="paymentMethod"
+                value={form.paymentMethod}
+                onChange={handleChange}
+                disabled={isSaving}
+              >
+                <option value="Efectivo">Efectivo</option>
+                <option value="Transferencia">Transferencia</option>
+                <option value="Otro">Otro</option>
+              </select>
+            </div>
+          </div>
+          <div className="form-field">
+            <label htmlFor="manual-booking-notes">Notas (opcional)</label>
+            <textarea
+              id="manual-booking-notes"
+              name="notes"
+              value={form.notes}
+              onChange={handleChange}
+              disabled={isSaving}
+            />
+          </div>
+          <DismissibleAlert type="error" message={error} onDismiss={() => {}} />
+          <div className="modal-actions">
+            <button type="button" className="secondary-button" onClick={onClose} disabled={isSaving}>
+              Cancelar
+            </button>
+            <button type="submit" className="primary-button" disabled={isSaving || !canSubmit}>
+              {isSaving ? 'Guardando...' : 'Cargar turno'}
+            </button>
+          </div>
+        </form>
+      </div>
     </div>
   );
 }
@@ -3203,6 +3452,9 @@ export default function App() {
   const [deletingStaffId, setDeletingStaffId] = useState(null);
   const [cancellingAppointmentId, setCancellingAppointmentId] = useState(null);
   const [confirmingAppointmentId, setConfirmingAppointmentId] = useState(null);
+  const [isManualBookingOpen, setIsManualBookingOpen] = useState(false);
+  const [isSavingManualBooking, setIsSavingManualBooking] = useState(false);
+  const [manualBookingError, setManualBookingError] = useState(null);
   const [serviceActionError, setServiceActionError] = useState(null);
   const [isSavingService, setIsSavingService] = useState(false);
   const [deletingServiceId, setDeletingServiceId] = useState(null);
@@ -3739,6 +3991,32 @@ export default function App() {
     [token, loadData]
   );
 
+  const handleFetchManualBookingSlots = useCallback(
+    ({ staffId, date, durationMinutes }) => {
+      if (!token) return Promise.reject(new Error('No hay sesión activa'));
+      return fetchAppointmentAvailability({ token, staffId, date, durationMinutes });
+    },
+    [token]
+  );
+
+  const handleCreateManualAppointment = useCallback(
+    async (payload) => {
+      if (!token) return;
+      setIsSavingManualBooking(true);
+      setManualBookingError(null);
+      try {
+        await createManualAppointment({ token, appointment: payload });
+        await loadData();
+        setIsManualBookingOpen(false);
+      } catch (error) {
+        setManualBookingError(error.payload?.message || error.message || 'No se pudo cargar el turno.');
+      } finally {
+        setIsSavingManualBooking(false);
+      }
+    },
+    [token, loadData]
+  );
+
   const handleDismissStaffError = useCallback(() => {
     setStaffActionError(null);
     setScheduleActionError(null);
@@ -3900,8 +4178,25 @@ export default function App() {
                 onCancelAppointment={canCancelAppointments ? handleCancelAppointment : undefined}
                 confirmingAppointmentId={confirmingAppointmentId}
                 cancellingAppointmentId={cancellingAppointmentId}
+                onOpenManualBooking={
+                  canCancelAppointments ? () => setIsManualBookingOpen(true) : undefined
+                }
               />
             )}
+
+            <ManualBookingModal
+              open={isManualBookingOpen}
+              staff={staff}
+              services={services}
+              isSaving={isSavingManualBooking}
+              error={manualBookingError}
+              onClose={() => {
+                setIsManualBookingOpen(false);
+                setManualBookingError(null);
+              }}
+              onSubmit={handleCreateManualAppointment}
+              onFetchSlots={handleFetchManualBookingSlots}
+            />
 
             {activeSection === 'services' && (
               <ServicesView
