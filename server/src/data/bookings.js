@@ -32,6 +32,23 @@ const overlaps = (startA, endA, startB, endB) => {
   return startA < endB && startB < endA;
 };
 
+// `new Date('2026-08-31')` parsea la fecha como medianoche UTC. En un
+// servidor con zona horaria negativa (ej. America/Argentina/Buenos_Aires,
+// UTC-3) eso cae en el día anterior en hora local, y `.getDay()` devuelve
+// el día de la semana equivocado -- corriendo la disponibilidad de TODO el
+// calendario un día para atrás. Construyendo la fecha con año/mes/día
+// sueltos, el motor de JS la interpreta en hora local y el día de la
+// semana da siempre correcto, sin importar la zona horaria del servidor.
+function isoDateToLocalDate(isoDate) {
+  const [year, month, day] = String(isoDate || '')
+    .split('-')
+    .map((part) => Number(part));
+  if (!Number.isInteger(year) || !Number.isInteger(month) || !Number.isInteger(day)) {
+    return null;
+  }
+  return new Date(year, month - 1, day);
+}
+
 function parseDateValue(value) {
   const date = value instanceof Date ? value : new Date(value);
   return Number.isNaN(date.getTime()) ? null : date;
@@ -130,7 +147,8 @@ function getScheduleForDate(staff, isoDate) {
 
   const availabilityDays = staff.workSchedule?.availabilityDays;
   if (Array.isArray(availabilityDays)) {
-    const day = new Date(isoDate).getDay();
+    const referenceDate = isoDateToLocalDate(isoDate);
+    const day = referenceDate ? referenceDate.getDay() : new Date(isoDate).getDay();
     if (!availabilityDays.includes(day)) {
       return null;
     }
