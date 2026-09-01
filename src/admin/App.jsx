@@ -2711,7 +2711,7 @@ function BrandingView({ branding, isLoading, isSaving, error, onSave, mode = 'al
                 />
               </div>
               <div className="form-field">
-                <label htmlFor="transfer-destination">Cuenta de destino</label>
+                <label htmlFor="transfer-destination">CBU / CVU / cuenta bancaria</label>
                 <input
                   type="text"
                   id="transfer-destination"
