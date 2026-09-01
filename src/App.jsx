@@ -109,9 +109,9 @@ const STEPS = [
       'Visualizá turnos confirmados, pendientes y cancelados en un panel diseñado para la vida en salón.',
   },
   {
-    title: 'Confirmá y cobrá desde el mismo lugar',
+    title: 'Confirmá el turno cuando te llega el pago',
     copy:
-      'Recibí alertas y confirmaciones en tiempo real. Configurá seña previa para los servicios de alta demanda.',
+      'La clienta te manda el comprobante de la transferencia por WhatsApp y vos confirmás el turno con un clic desde el mismo panel donde ves tu agenda.',
   },
 ];
 
@@ -1183,6 +1183,18 @@ function BookingFlow({
     });
   }, [bookingServices, selectedBarberInfo]);
 
+  // Con un solo profesional activo no tiene sentido pedirle al cliente que
+  // "elija" peluquero/a -- lo seleccionamos solos y arrancamos directo en el
+  // paso de servicio.
+  const hasSingleBarber = !isLoadingBarbers && barbers.length === 1;
+
+  useEffect(() => {
+    if (hasSingleBarber && !selectedBarber) {
+      setSelectedBarber(barbers[0].id);
+      setActiveStep((prev) => (prev < 2 ? 2 : prev));
+    }
+  }, [hasSingleBarber, barbers, selectedBarber]);
+
   const updateBarberScrollState = useCallback(() => {
     const container = barberListRef.current;
     if (!container) {
@@ -1714,6 +1726,9 @@ function BookingFlow({
   const hasBarbers = Array.isArray(barbers) && barbers.length > 0;
   const hasServices = Array.isArray(visibleServices) && visibleServices.length > 0;
   const showCarousel = !isLoadingBarbers && hasBarbers;
+  // Cuando el paso de "elegí peluquero/a" queda oculto, los pasos
+  // siguientes corren un número para arriba (Paso 2 pasa a ser Paso 1, etc.).
+  const stepLabel = (step) => `Paso ${hasSingleBarber ? step - 1 : step}`;
 
   return (
     <div className="booking-page">
@@ -1724,11 +1739,13 @@ function BookingFlow({
           </button>
           <h1>Reservá tu turno</h1>
           <p>
-            Completá cada paso para confirmar tu turno. Empezá eligiendo con quién querés atenderte y vas a
-            desbloquear las siguientes secciones.
+            {hasSingleBarber
+              ? 'Completá cada paso para confirmar tu turno. Empezá eligiendo el servicio que querés reservar.'
+              : 'Completá cada paso para confirmar tu turno. Empezá eligiendo con quién querés atenderte y vas a desbloquear las siguientes secciones.'}
           </p>
         </div>
       </header>
+      {!hasSingleBarber && (
       <section className={`booking-section ${activeStep === 1 ? 'is-active' : 'is-completed'}`} aria-disabled={activeStep > 1}>
         <div className="booking-section-header">
           <span className="step-indicator">Paso 1</span>
@@ -1801,20 +1818,23 @@ function BookingFlow({
           </div>
         )}
       </section>
+      )}
       {activeStep >= 2 && (
         <section
           className={`booking-section ${activeStep === 2 ? 'is-active' : activeStep > 2 ? 'is-completed' : ''}`}
           ref={serviceSectionRef}
         >
           <div className="booking-section-header">
-            <span className="step-indicator">Paso 2</span>
+            <span className="step-indicator">{stepLabel(2)}</span>
             <div className="booking-section-heading">
               <h2>Seleccioná tu servicio</h2>
               <p>Elegí el tipo de turno que querés reservar antes de definir fecha y horario.</p>
             </div>
-            <button type="button" className="secondary-link" onClick={() => setActiveStep(1)}>
-              ← Cambiar peluquero/a
-            </button>
+            {!hasSingleBarber && (
+              <button type="button" className="secondary-link" onClick={() => setActiveStep(1)}>
+                ← Cambiar peluquero/a
+              </button>
+            )}
           </div>
           <div className="service-carousel">
             <button
@@ -1881,7 +1901,7 @@ function BookingFlow({
           ref={scheduleSectionRef}
         >
           <div className="booking-section-header">
-            <span className="step-indicator">Paso 3</span>
+            <span className="step-indicator">{stepLabel(3)}</span>
             <div className="booking-section-heading">
               <h2>Elegí el día y horario</h2>
               <p>Primero seleccioná el día disponible y luego elegí el horario que mejor te quede.</p>
@@ -1953,7 +1973,7 @@ function BookingFlow({
           ref={customerSectionRef}
         >
           <div className="booking-section-header">
-            <span className="step-indicator">Paso 4</span>
+            <span className="step-indicator">{stepLabel(4)}</span>
             <div className="booking-section-heading">
               <h2>Ingresá tus datos</h2>
               <p>Necesitamos tus datos para confirmar el turno y enviarte la información de pago.</p>
